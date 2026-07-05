@@ -1,0 +1,87 @@
+# macOS / editor files
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+.vscode/
+.idea/
+missfont.log
+*.aux
+*.out
+*.log
+
+# Python caches / local environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Build artifacts and native extensions
+build/
+dist/
+*.egg-info/
+*.o
+*.so
+*.dylib
+*.dll
+
+# Archives and downloaded packages
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Research data, model weights, and large binary assets
+DECA/data/*
+!DECA/data/.gitkeep
+DECA/datasets/*
+!DECA/datasets/.gitkeep
+DECA/results/*
+!DECA/results/.gitkeep
+DECA/logs/
+DECA/.git_backup/
+DECA/TestSamples/
+DECA/TestSamples/**/results*/
+
+# Common generated ML / 3D outputs
+*.mat
+*.pkl
+*.obj
+*.dat
+*.npz
+*.npy
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.tar
+
+# Generated reports and local analysis outputs
+DECA/docs/rendered_*/
+DECA/docs/*_results.csv
+DECA/docs/*_single_test.csv
+DECA/docs/*_summary.csv
+phase2_visualizations/
+phase2_deca_standardization_plan.pdf
+/results/
+/datasets/
+/data/
+
+# Private planning / office documents
+*.docx
+~$*.docx
+
+# Internal or local-only folders
+cluster_scripts/
+internal/

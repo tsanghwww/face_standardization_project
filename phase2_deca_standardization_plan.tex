@@ -1,0 +1,485 @@
+% !TEX TS-program = xelatex
+\documentclass[UTF8,12pt,fontset=fandol]{ctexart}
+
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=blue,
+    urlcolor=blue
+}
+
+\setlist[itemize]{leftmargin=2em}
+\setlist[enumerate]{leftmargin=2em}
+
+\title{基于 DECA 参数空间增强的 Phase2 人脸标准化改进方案}
+\author{曾浩荣}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{问题定义}
+
+项目目前在 Phase2 中需要生成标准化条件，将输入人脸转换到更统一的姿态和表情状态。在前一版方案，如果直接将 DECA/FLAME 参数中的 expression 和 pose 硬调零，即
+\[
+\psi_{\text{std}} = 0,\qquad \theta_{\text{std}} = 0,
+\]
+在高质量、正脸、关键点稳定的输入上可能有效，而在目前数据集中也确实有效；但在遮挡、大姿态、模糊、低分辨率或关键点检测失败这些不可控的情况发生时，这种硬标准化会把不可靠的估计结果强行送入解码器，容易导致脸部几何崩坏。在这里硬调零将作为这个阶段的baseline。
+
+该问题的根源是训练集分布过于标准，缺少姿态、表情、光照、遮挡和裁剪扰动。模型因此只学习到窄分布下的标准化映射，缺少对失败输入的鲁棒处理能力。
+
+\section{论文依据}
+
+DECA 论文指出，DECA 从单张图像回归 detail、shape、albedo、expression、pose 和 illumination 参数，并使用 FLAME 作为粗几何模型 \cite{deca2021,flame2017}。DECA 的关键设计是将身份相关细节和表情相关动态细节解耦：静态身份细节由 subject-specific detail code 控制，而动态皱纹和嘴部相关细节由 FLAME expression 以及 jaw pose 控制 \cite{deca2021}。
+
+因此，expression 和 jaw pose 不是可以无条件清零的普通噪声。它们会影响嘴角、法令纹、眼周皱纹等动态几何。如果输入质量较差，硬清零 expression 和 pose 会放大估计误差，导致标准化结果失真。
+
+DECA 还使用 68 个 2D landmarks 进行 landmark re-projection loss，并使用 FAN 预测关键点；作者为了提升 landmark 的鲁棒性，对同一图像使用不同 face crop 跑两次 FAN，并丢弃 landmarks 不一致的图像 \cite{deca2021,fan2017}。这说明关键点稳定性本身就是标准化前必须考虑的质量信号。
+
+此外，ArcFace 将人脸映射到归一化 embedding 空间，并通过角度 margin 学习身份判别特征 \cite{arcface2019}。因此，ArcFace cosine similarity 可以作为标准化前后身份一致性的约束。对于数据不足问题，domain randomization 的思想表明，可以通过模拟多种扰动让真实世界变化落入训练分布，从而提升模型鲁棒性 \cite{domainrandomization2017}。
+
+\section{总体方案}
+
+Phase2 不应只输出一个硬标准化后的参数，而应输出目标条件和标准化强度。推荐将流程从
+\[
+\text{image} \rightarrow \text{DECA params} \rightarrow \psi=0,\theta=0 \rightarrow \text{decode}
+\]
+改为
+\begin{align*}
+\text{image}
+&\rightarrow \text{DECA params + quality metrics} \\
+&\rightarrow G_{\phi} \\
+&\rightarrow
+(\psi_t,\theta_t,\alpha_{\psi},\alpha_{\theta},\alpha_{\text{jaw}},c) \\
+&\rightarrow \text{partial canonicalization}.
+\end{align*}
+
+其中 \(G_{\phi}\) 是 Phase2 condition generator，输出目标 expression、目标 pose、标准化强度和置信度。
+
+\section{置信度驱动的分层标准化}
+
+标准化公式为：
+\[
+\psi_{\text{std}} =
+(1-\alpha_{\psi})\psi_{\text{in}} +
+\alpha_{\psi}\psi_t,
+\]
+\[
+\theta_{\text{head,std}} =
+(1-\alpha_{\theta})\theta_{\text{head,in}} +
+\alpha_{\theta}\theta_{\text{head},t},
+\]
+\[
+\theta_{\text{jaw,std}} =
+(1-\alpha_{\text{jaw}})\theta_{\text{jaw,in}} +
+\alpha_{\text{jaw}}\theta_{\text{jaw},t}.
+\]
+
+其中：
+\[
+\alpha_{\psi},\alpha_{\theta},\alpha_{\text{jaw}}\in[0,1].
+\]
+
+当输入人脸质量高、关键点稳定、姿态适中时，可以使用较大的 \(\alpha\)，执行强标准化；当输入存在遮挡、大姿态、低清晰度或 landmark 不稳定时，应降低 \(\alpha\)，只进行弱标准化；当质量极低时，直接输出 reject 或 fallback，而不是强行生成。
+
+\section{Phase2 输入与输出设计}
+
+\subsection{输入}
+
+Phase2 输入包括两类信息。
+
+\begin{itemize}
+    \item DECA 参数：shape、expression、pose、camera、illumination、detail code。
+    \item 质量信号：landmark reprojection error、FAN/landmark confidence、face bbox size、yaw/pitch/roll magnitude、mouth openness、eye closure、blur score、occlusion score、illumination score、ArcFace identity score。
+\end{itemize}
+
+其中 shape、texture 和 detail code 主要表示身份相关信息，不应被 Phase2 随意改变；expression、head pose、jaw pose、illumination 和 camera 是更适合标准化和增强的 nuisance factors。
+
+\subsection{输出}
+
+第一版输出：
+
+\begin{itemize}
+    \item \( \psi_t \in \mathbb{R}^{50} \)：目标 expression；
+    \item \( \theta_{\text{head},t} \in \mathbb{R}^{3} \)：目标 head pose；
+    \item \( \theta_{\text{jaw},t} \in \mathbb{R}^{3} \)：目标 jaw pose；
+    \item \( \alpha_{\psi},\alpha_{\theta},\alpha_{\text{jaw}} \)：标准化强度；
+    \item \( c \)：质量置信度；
+    \item \( r \)：reject score。
+\end{itemize}
+
+第一版不直接做 50 维 expression 的逐维 \(\alpha\)，先使用三个 scalar：\(\alpha_{\psi}\)、\(\alpha_{\theta}\)、\(\alpha_{\text{jaw}}\)（ FLAME expression 的 50 维是统计表达基，不是人工定义的语义 AU 维度，逐维解释性较弱）。
+
+\subsection{XGBoost 前置样本质量筛选}
+
+在 Phase2 训练前，可以引入 XGBoost 作为前置样本筛选器。这里的 XGBoost 不是直接放进神经网络 loss 里反向传播，而是用于判断样本质量，给样本分级。它更适合处理 DECA 参数、landmark error、ArcFace score、blur score 这类结构化特征 \cite{xgboost2016}。
+
+具体来说，XGBoost 输入为：
+
+\begin{itemize}
+    \item DECA 参数异常程度：expression norm、pose magnitude、camera scale、illumination magnitude；
+    \item landmark 质量：landmark reprojection error、FAN/landmark confidence、不同 crop 下 landmark 是否稳定；
+    \item 身份质量：ArcFace cosine score；
+    \item 图像质量：blur score、occlusion score、bbox size、brightness/contrast score。
+\end{itemize}
+
+XGBoost 输出不是生成标准化人脸，而是输出样本质量分级：
+
+\[
+q_{\text{xgb}}\in[0,1],
+\qquad
+y_{\text{xgb}}\in\{\text{high},\text{medium},\text{low}\}.
+\]
+
+其中 high-quality 样本用于强标准化训练；medium-quality 样本保留，但降低 loss 权重，只用于弱标准化训练；low-quality 样本不进入强标准化训练，可以用于 reject/fallback 学习。
+
+因此这里的目的不是只保留最标准的人脸，否则会让数据分布再次变窄；更合理的做法是：
+
+\begin{itemize}
+    \item 筛掉明显崩坏、身份漂移、关键点严重错误的样本；
+    \item 保留一部分中等质量但身份稳定的样本；
+    \item 根据质量分数调整训练权重和标准化强度。
+\end{itemize}
+
+\section{DECA 参数空间增强}
+
+由于当前无法获得足够多样化的数据，可以在 DECA 参数空间中构造扰动（扰动的设计是基于工程习惯而非基于某篇论文或公式）。核心原则是：
+
+\[
+\text{identity factors fixed},\qquad
+\text{nuisance factors perturbed}.
+\]
+
+具体地：
+
+\begin{itemize}
+    \item 保持 shape、texture/albedo、detail code 不变；
+    \item 扰动 expression、head pose、jaw pose、illumination、camera；
+    \item 不随机扰动 shape，否则会改变身份；
+    \item 不随机扰动 detail code，因为 DECA 中 detail code 表示 subject-specific details；
+    \item 动态皱纹和嘴部细节应通过 expression 和 jaw pose 控制。
+\end{itemize}
+
+\subsection{Head Pose 扰动}
+
+训练由易至难（curriculum），从小姿态扰动逐渐过渡到大姿态扰动：
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lccc}
+\toprule
+阶段 & yaw & pitch & roll \\
+\midrule
+Stage 1 & \(\pm 15^\circ\) & \(\pm 10^\circ\) & \(\pm 8^\circ\) \\
+Stage 2 & \(\pm 30^\circ\) & \(\pm 20^\circ\) & \(\pm 15^\circ\) \\
+Stage 3 & \(\pm 45^\circ\) & \(\pm 25^\circ\) & \(\pm 20^\circ\) \\
+\bottomrule
+\end{tabular}
+\caption{Head pose 扰动学习设置}
+\end{table}
+
+对于小角度扰动，可以近似在 axis-angle 表示上加噪声；对于较大角度，建议将 axis-angle 转成 rotation matrix，完成旋转组合后再转回 axis-angle，以减少旋转空间近似误差。
+
+\subsection{Jaw Pose 扰动}
+
+Jaw pose 单独处理：
+
+\[
+\theta_{\text{jaw,open}} \in [0^\circ,20^\circ],
+\]
+\[
+\theta_{\text{jaw,lateral}} \in [-5^\circ,5^\circ],
+\]
+\[
+\theta_{\text{jaw,twist}} \in [-5^\circ,5^\circ].
+\]
+
+因为 DECA detail decoder 明确使用 jaw pose 和 expression 共同控制动态细节 \cite{deca2021}。
+
+\subsection{Expression 扰动}
+
+不对 50 维 expression 做独立均匀采样。先统计训练集中的 expression 分布：
+
+\[
+\mu_{\psi}=\mathrm{mean}(\psi),\qquad
+\Sigma_{\psi}=\mathrm{cov}(\psi).
+\]
+
+然后采样：
+\[
+\psi_{\text{aug}}=\psi_{\text{in}} + s\epsilon,\qquad
+\epsilon\sim \mathcal{N}(0,\Sigma_{\psi}).
+\]
+
+并进行裁剪：
+\[
+\psi_{\text{aug}} =
+\mathrm{clip}(\psi_{\text{aug}},
+\mu_{\psi}-2.5\sigma_{\psi},
+\mu_{\psi}+2.5\sigma_{\psi}).
+\]
+
+更稳定的方式是 expression mixup：
+\[
+\psi_{\text{aug}} =
+\lambda\psi_i + (1-\lambda)\psi_j,\qquad
+\lambda\in[0.3,0.7].
+\]
+
+\subsection{图像层增强}
+
+仅做 latent-space augmentation 不足以模拟 landmark 失败，因为很多失败发生在图像到参数估计之前。因此还应加入：
+
+\begin{itemize}
+    \item crop jitter；
+    \item random blur；
+    \item JPEG compression；
+    \item brightness/contrast shift；
+    \item random occlusion；
+    \item landmark noise/dropout；
+    \item shadow simulation。
+\end{itemize}
+
+这部分对应 domain randomization 的思想：通过随机化训练条件提升模型对真实环境变化的鲁棒性 \cite{domainrandomization2017}。
+
+\section{训练损失（这里和arcface有关系了）}
+
+总损失为：
+\[
+\mathcal{L} =
+\mathcal{L}_{\text{cond}}
++ \lambda_{\text{id}}\mathcal{L}_{\text{id}}
++ \lambda_{\text{lmk}}\mathcal{L}_{\text{lmk}}
++ \lambda_{\text{cycle}}\mathcal{L}_{\text{cycle}}
++ \lambda_{\text{smooth}}\mathcal{L}_{\text{smooth}}
++ \lambda_{\text{quality}}\mathcal{L}_{\text{quality}}.
+\]
+
+\subsection{标准条件损失}
+
+\[
+\mathcal{L}_{\text{cond}} =
+c_{\text{xgb}}\left(
+\|\psi_{\text{std}}-\psi_{\text{canonical}}\|_1
++
+\|\theta_{\text{std}}-\theta_{\text{canonical}}\|_1
+\right).
+\]
+
+其中 \(c_{\text{xgb}}\) 是由 XGBoost 输出的质量置信度或样本权重。质量越低，越不应强迫样本贴近 canonical target。这样做的意义是：XGBoost 不参与反向传播，只作为前置质量评估模块，控制这个样本在标准化条件损失中占多大权重。
+
+\subsection{身份保持损失}
+
+使用 ArcFace embedding 约束标准化前后身份一致：
+\[
+\mathcal{L}_{\text{id}} =
+1 -
+\cos
+\left(
+f_{\text{ArcFace}}(I_{\text{in}}),
+f_{\text{ArcFace}}(I_{\text{std}})
+\right).
+\]
+
+ArcFace 的归一化 embedding 和 angular margin 设计适合用于身份一致性约束 \cite{arcface2019}。
+
+\subsection{Landmark 几何损失}
+
+\[
+\mathcal{L}_{\text{lmk}} =
+\|K(I_{\text{std}})-K_{\text{canonical}}\|_1.
+\]
+
+其中 \(K(\cdot)\) 表示 68 个关键点。该损失与 DECA 中的 landmark re-projection loss 一致 \cite{deca2021}。
+
+\subsection{Cycle Consistency}
+
+对同一身份构造两个不同扰动：
+\[
+x \rightarrow a_1(x) \rightarrow z_1,
+\qquad
+x \rightarrow a_2(x) \rightarrow z_2.
+\]
+
+标准化结果应接近：
+\[
+\mathcal{L}_{\text{cycle}}=\|z_1-z_2\|_1.
+\]
+
+这能减少模型对 Kaggle 标准脸分布的过拟合。
+
+\subsection{Smoothness Loss}
+
+输入参数的小扰动不应导致输出条件剧烈变化：
+\[
+\mathcal{L}_{\text{smooth}} =
+\frac{\|G_{\phi}(p+\epsilon)-G_{\phi}(p)\|_2}{\|\epsilon\|_2}.
+\]
+
+该项直接针对关键点或参数轻微不稳定导致整张脸崩坏的问题。
+
+\section{训练流程}
+
+\subsection{阶段零：XGBoost 样本质量分级}
+
+\begin{enumerate}
+    \item 使用现有数据跑 DECA、ArcFace 和 landmark 检测，提取结构化质量特征。
+    \item 根据人工检查或 proxy 指标构造标签，例如是否崩脸、ArcFace 是否明显下降、landmark error 是否过大。
+    \item 训练 XGBoost 质量评估器，输出 \(q_{\text{xgb}}\)、\(c_{\text{xgb}}\) 和 high/medium/low 三档质量标签。
+    \item high-quality 样本用于强标准化训练，medium-quality 样本降低权重用于弱标准化训练，low-quality 样本用于 reject/fallback。
+\end{enumerate}
+
+\subsection{阶段一：冻结 DECA，仅训练 Phase2}
+
+\begin{enumerate}
+    \item 使用现有 Kaggle 数据跑 DECA，保存 shape、expression、pose、camera、illumination、detail code。
+    \item 统计 expression 和 pose 分布。
+    \item 使用 XGBoost 质量分级结果确定样本权重和训练角色。
+    \item 在 DECA 参数空间造 augmentation。
+    \item 训练 Phase2 condition generator。
+\end{enumerate}
+
+\subsection{阶段二：加入可微解码验证}
+
+\begin{enumerate}
+    \item Phase2 输出 \(\psi_{\text{std}}\) 和 \(\theta_{\text{std}}\)。
+    \item 将标准化参数送入 DECA decoder。
+    \item 计算 landmark loss、identity loss 和 smoothness loss。
+\end{enumerate}
+
+\subsection{阶段三：模拟失败输入}
+
+\begin{enumerate}
+    \item 对图像加入 crop jitter、occlusion、blur、compression。
+    \item 对 landmarks 加 noise 或 dropout。
+    \item 训练 Phase2 在不可靠输入上降低 \(\alpha\) 或输出 reject。
+\end{enumerate}
+
+\subsection{阶段四：阈值校准}
+
+用少量人工检查样本校准：
+
+\begin{itemize}
+    \item ArcFace cosine threshold；
+    \item landmark reprojection error threshold；
+    \item reject score threshold；
+    \item \(\alpha_{\psi}, \alpha_{\theta}, \alpha_{\text{jaw}}\) 的最大值。
+\end{itemize}
+
+\section{推理阶段策略}
+
+推理时应保存标准化结果和诊断信息：
+
+\begin{itemize}
+    \item standardized image 或 mesh；
+    \item original expression / pose；
+    \item standardized expression / pose；
+    \item \(\alpha_{\psi}, \alpha_{\theta}, \alpha_{\text{jaw}}\)；
+    \item landmark score；
+    \item ArcFace score；
+    \item reject score；
+    \item failure reason。
+\end{itemize}
+
+规则：
+
+\[
+\text{if landmark low and ArcFace low: reject}
+\]
+\[
+\text{if landmark medium: weak standardization}
+\]
+\[
+\text{if landmark high and pose moderate: strong standardization}
+\]
+
+\section{消融实验设计}
+
+为了证明方案有效，比较以下实验组：
+
+\begin{table}[h]
+\centering
+\begin{tabular}{ll}
+\toprule
+组别 & 设置 \\
+\midrule
+A & 直接设置 expression = 0, pose = 0 \\
+B & 置信度驱动 partial standardization \\
+C & B + DECA latent-space augmentation \\
+D & C + image-level corruption \\
+E & D + ArcFace identity loss \\
+F & E + reject / quality gate \\
+G & F + XGBoost 前置质量分级和样本权重 \\
+\bottomrule
+\end{tabular}
+\caption{Phase2 改进方案消融实验}
+\end{table}
+
+评价指标：
+
+\begin{itemize}
+    \item ArcFace cosine before/after；
+    \item landmark reprojection error；
+    \item pose-to-canonical error；
+    \item identity failure rate；
+    \item collapse rate；
+    \item reject precision；
+    \item 人工视觉评分。
+\end{itemize}
+
+\section{结论}
+
+
+核心思想：以置信度驱动 DECA 参数空间人脸标准化，通过 latent-space augmentation、身份保持损失和质量门控，实现有限训练数据条件下更鲁棒的姿态与表情标准化。
+
+核心优势：不再将所有输入强制推到同一个零 expression / 零 pose 状态，而是根据输入质量动态决定标准化强度。在关键点不稳定或输入质量差时，模型可以选择弱标准化或拒绝生成，从而降低整张脸崩坏的概率。
+
+\begin{thebibliography}{9}
+
+\bibitem{deca2021}
+Yao Feng, Haiwen Feng, Michael J. Black, and Timo Bolkart.
+\newblock Learning an Animatable Detailed 3D Face Model from In-The-Wild Images.
+\newblock \emph{ACM Transactions on Graphics}, 2021.
+\newblock \url{https://arxiv.org/abs/2012.04012}
+
+\bibitem{flame2017}
+Tianye Li, Timo Bolkart, Michael J. Black, Hao Li, and Javier Romero.
+\newblock Learning a Model of Facial Shape and Expression from 4D Scans.
+\newblock \emph{ACM Transactions on Graphics}, 2017.
+\newblock \url{https://flame.is.tue.mpg.de/}
+
+\bibitem{fan2017}
+Adrian Bulat and Georgios Tzimiropoulos.
+\newblock How far are we from solving the 2D and 3D Face Alignment problem? and a dataset of 230,000 3D facial landmarks.
+\newblock \emph{ICCV}, 2017.
+\newblock \url{https://arxiv.org/abs/1703.07332}
+
+\bibitem{arcface2019}
+Jiankang Deng, Jia Guo, Niannan Xue, and Stefanos Zafeiriou.
+\newblock ArcFace: Additive Angular Margin Loss for Deep Face Recognition.
+\newblock \emph{CVPR}, 2019.
+\newblock \url{https://arxiv.org/abs/1801.07698}
+
+\bibitem{domainrandomization2017}
+Josh Tobin, Rachel Fong, Alex Ray, Jonas Schneider, Wojciech Zaremba, and Pieter Abbeel.
+\newblock Domain Randomization for Transferring Deep Neural Networks from Simulation to the Real World.
+\newblock \emph{IROS}, 2017.
+\newblock \url{https://arxiv.org/abs/1703.06907}
+
+\bibitem{xgboost2016}
+Tianqi Chen and Carlos Guestrin.
+\newblock XGBoost: A Scalable Tree Boosting System.
+\newblock \emph{KDD}, 2016.
+\newblock \url{https://doi.org/10.1145/2939672.2939785}
+
+\end{thebibliography}
+
+\end{document}

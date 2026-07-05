@@ -1,0 +1,15 @@
+# Modern runtime for Python 3.10+ and current PyTorch.
+# PyTorch/torchvision are installed separately so macOS, CPU, and CUDA users can
+# choose the correct wheel index.
+numpy
+scipy
+scikit-image
+opencv-python
+PyYAML
+face-alignment
+yacs
+kornia
+ninja
+fvcore
+tqdm
+imageio
