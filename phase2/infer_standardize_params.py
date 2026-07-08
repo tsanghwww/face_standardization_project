@@ -68,7 +68,10 @@ def decision(reject: float, confidence: float, reject_threshold: float, weak_thr
 def main() -> None:
     args = parse_args()
     device = resolve_device(args.device)
-    ckpt = torch.load(args.checkpoint, map_location=device)
+    # Phase2 checkpoints are produced locally by train_condition_generator and
+    # include numpy arrays for the feature normalizer. PyTorch 2.6+ defaults to
+    # weights_only=True, which rejects those trusted metadata objects.
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model = ConditionGenerator(input_dim=int(ckpt["input_dim"]), hidden_dim=int(ckpt["hidden_dim"])).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
@@ -167,4 +170,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
