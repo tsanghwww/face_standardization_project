@@ -26,11 +26,11 @@
 
 ### Checkpoints
 
-| Stage | Path (5060) | Status |
-|---|---|---|
-| Stage 1 | `results/phase2_real_train_stage1_recovered/best_model.pt` | ✅ Recovered |
-| Stage 2 | `results/phase2_real_train_stage2_recovered/best_model.pt` | ✅ Recovered |
-| Stage 3 | `results/phase2_real_train_stage3_recovered/best_model.pt` | ✅ Recovered |
+| Stage | Path (5060) | Size | Status |
+|---|---|---|---|
+| Stage 1 | `results/phase2_real_train_stage1_recovered/best_model.pt` | 439 KB | ✅ Recovered |
+| Stage 2 | `results/phase2_real_train_stage2_recovered/best_model.pt` | [待确认] | ✅ Recovered |
+| Stage 3 | `results/phase2_real_train_stage3_recovered/best_model.pt` | [待确认] | ✅ Recovered |
 
 ### Checkpoint Contents
 
@@ -38,8 +38,32 @@ Each checkpoint contains:
 - `model_state`: ConditionGenerator state dict
 - `input_dim`: Input dimension
 - `hidden_dim`: Hidden dimension
-- Normalizer parameters (numpy arrays)
-- Training metadata
+- Normalizer parameters (numpy arrays, stored as `normalizer.npz`)
+- Training metadata (`train_summary.json`, `train_history.csv`)
+
+### Inference Outputs
+
+| Stage | Path | Size | Files |
+|---|---|---|---|
+| Stage 1 | `results/phase2_real_infer_stage1_recovered/` | 48 MB | 10,002 |
+| Stage 2 | `results/phase2_real_infer_stage2_recovered/` | 48 MB | 10,002 |
+| Stage 3 | `results/phase2_real_infer_stage3_recovered/` | 48 MB | 10,002 |
+| Hard Zero | `results/phase2_hard_zero_recovered/` | 38 MB | 10,002 |
+
+### Baseline & Comparison
+
+| Output | Path | Size |
+|---|---|---|
+| Hard Zero | `results/phase2_hard_zero_recovered/` | 38 MB |
+| Comparison | `results/phase2_recovered_compare/` | <1 MB |
+| Full Comparison | `results/phase2_recovered_compare_full/` | <1 MB |
+
+### Dataset Screening
+
+| Screen | Path | Size | Files |
+|---|---|---|---|
+| p95 | `results/screening_p95/` | 11.6 GB | 10,008 |
+| p97.5 | `results/screening_p975/` | 11.6 GB | 10,008 |
 
 ## XGBoost Quality Scorer
 

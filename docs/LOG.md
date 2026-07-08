@@ -38,4 +38,20 @@
   - Defined context loading and saving protocols
   - Documented safety rules and code boundaries
 - **Files changed**: 24 new files under .openclaw/ and docs/
-- **Outcome**: PIL v1.0 initialized, ready for use
+- **Outcome**: PIL v1.0 initialized, committed and synced to 5060
+
+## 2026-07-08 21:32 — Skill Installation & 5060 Statistics
+
+- **Agent**: DeepSeek
+- **Tasks**:
+  - Installed pil-context-sync skill to ~/.openclaw/skills/ (OpenClaw discovery path)
+  - Scanned 5060 project directory: 130,117 files, 54.4 GB total
+  - Broke down by directory: results (23.3GB), archive+dataset (23.1GB), venv (5.1GB), DECA (3.0GB)
+  - Detailed results inventory: screening sets, inference outputs, training checkpoints
+  - Verified git status clean on 5060
+- **Files changed**: STATUS.md, LOG.md, MODEL.md, DATASET.md, NEXT.md, TODO.md
+- **Key outcomes**:
+  - Full project inventory documented with exact sizes and file counts
+  - PIL skill operational
+  - All experiment outputs accounted for (stage 1/2/3 training + inference + screening + baseline)
+  - D: drive has ~258 GB free

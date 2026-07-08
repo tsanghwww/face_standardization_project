@@ -6,11 +6,18 @@
 
 - **Location**: `D:\face_standardization_project\archive\generated_yellow-stylegan2\`
 - **Count**: 10,000 images
+- **Size**: 11.6 GB
 - **Format**: PNG
 - **Naming**: `0.png` through `9999.png`
 - **Source**: StyleGAN2 generation (yellow-stylegan2 variant)
 - **Status**: ✅ Present on 5060
-- **Backup**: Also archived in `archive.zip` (12GB)
+- **Backup**: Also archived in `archive.zip` (11.6 GB, identical content)
+
+### Screening Datasets (Pre-filtered)
+
+- **p95**: `results/screening_p95/` — 10,008 files, 11.6 GB
+- **p97.5**: `results/screening_p975/` — 10,008 files, 11.6 GB
+- **Note**: These may be redundant copies of filtered subsets from the main archive
 
 ## Test Data
 

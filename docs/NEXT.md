@@ -1,15 +1,14 @@
 # Next Actions
 
-- **2026-07-08**: Commit PIL files to GitHub and sync to 5060
-- **2026-07-08**: Await user confirmation on research priorities
-- **Next Session**: Read PIL context, confirm project phase, proceed with research tasks
+- **2026-07-08 21:38**: ✅ 5060 statistics collected, PIL docs updated
+- **Next**: Commit PIL updates and sync to GitHub + 5060
+- **Next Session**: Read PIL context, confirm research priorities with user
 
-### Immediate (Next Agent Session)
+### Immediate
 
-1. Run `pil-context-sync load` (or manual context loading)
-2. Confirm current phase with user
-3. Address any `[待确认]` items in STATUS.md
-4. Execute prioritized task from TODO.md
+1. Commit PIL stat updates and push to GitHub
+2. Sync 5060 (`git pull`)
+3. Await user research direction
 
 ### Pending User Decisions
 
@@ -17,3 +16,4 @@
 - [待確認] Target paper/conference venue
 - [待确认] Need for additional dataset restoration
 - [待确认] Backup strategy for checkpoints and data
+- [待确认] Can screening_p95 and screening_p975 be archived? (23 GB duplicated data)
