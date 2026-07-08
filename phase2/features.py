@@ -102,6 +102,10 @@ def read_kpt_quality(mat_path: Path, image_size: float = 224.0) -> dict[str, flo
             "landmark_score": 0.0,
         }
     xy = kpt[:, :2]
+    # DECA outputs landmarks in orthographic projection space (roughly [-1, 1]).
+    # Convert to pixel coordinates for quality heuristics.
+    # (This mirrors the commented-out denormalization in DECA decalib/deca.py L182.)
+    xy = xy * (image_size / 2.0) + (image_size / 2.0)
     out = (xy[:, 0] < 0) | (xy[:, 0] > image_size) | (xy[:, 1] < 0) | (xy[:, 1] > image_size)
     mins = xy.min(axis=0)
     maxs = xy.max(axis=0)
