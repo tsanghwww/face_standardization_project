@@ -1,7 +1,7 @@
 # Project Status
 
-- **Last Updated**: 2026-07-08 21:38
-- **Current Phase**: ✅ Recovery Complete · PIL Operational
+- **Last Updated**: 2026-07-08 22:10
+- **Current Phase**: ✅ Recovery Complete · PIL Operational · Bug Fixes
 
 ## 5060 Workstation Snapshot
 
@@ -51,6 +51,7 @@
 | Hard Zero Baseline | ✅ Complete | 10K baseline outputs |
 | Git & Code Sync | ✅ Complete | 3-way sync (Mac/5060/GitHub) |
 | PIL Setup | ✅ Complete | 24 files, 1300 lines, installed as skill |
+| BUG-003 Fix | ✅ Complete | kpt coordinate denormalization, landmark_score restored |
 | [待确认] Next Research Phase | ⏳ Pending | |
 
 ## Blockers
@@ -74,3 +75,14 @@
 | CUDA | ✅ RTX 5060, cu128 |
 | DECA models | ✅ deca_model.tar + FLAME present |
 | D: free space | ✅ ~258 GB remaining |
+
+## Latest Quality Metrics (200-sample spot check, after BUG-003 fix)
+
+| Metric | Mean | Range |
+|---|---|---|
+| landmark_score | 0.943 | 0.904 – 0.967 |
+| landmark_out_ratio | 0.000 | 0.000 |
+| landmark_bbox_area | 0.311 | 0.274 – |
+| landmark_center_dist | 0.071 | |
+| quality_score | 0.683 | 0.632 – 0.744 |
+| quality_class distribution | high=5, mid=195, low=0 | |
