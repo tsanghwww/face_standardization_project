@@ -41,7 +41,7 @@ def set_rasterizer(type = 'pytorch3d'):
                 # extra_cuda_cflags = ['-std=c++14', '-ccbin=$$(which gcc-7)']) # cuda10.2 is not compatible with gcc9. Specify gcc 7 
                 extra_cflags=['-std=c++17'],
                 extra_cuda_cflags=['-std=c++17', '--allow-unsupported-compiler'])
-        from standard_rasterize_cuda import standard_rasterize
+        standard_rasterize = standard_rasterize_cuda.standard_rasterize
         # If JIT does not work, try manually installation first
         # 1. see instruction here: pixielib/utils/rasterizer/INSTALL.md
         # 2. add this: "from .rasterizer.standard_rasterize_cuda import standard_rasterize" here
