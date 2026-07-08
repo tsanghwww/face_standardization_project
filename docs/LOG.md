@@ -55,3 +55,15 @@
   - PIL skill operational
   - All experiment outputs accounted for (stage 1/2/3 training + inference + screening + baseline)
   - D: drive has ~258 GB free
+
+## 2026-07-08 21:53 — BUG-003: kpt coordinate system fix
+
+- **Agent**: DeepSeek
+- **Tasks**:
+  - Diagnosed landmark_score=0 bug: DECA kpt2d in [-1,1] normalized space vs features.py expecting 224px pixel space
+  - Root cause: denormalization commented out in DECA decalib/deca.py L182
+  - Fix: added `xy = xy * (image_size/2) + (image_size/2)` in features.py L108
+  - Committed and synced to GitHub + 5060
+  - Updated BUGS.md with bug lifecycle record
+- **Files changed**: phase2/features.py (+4 lines), docs/BUGS.md
+- **Key outcomes**: landmark_score should now work correctly for all 10K samples
