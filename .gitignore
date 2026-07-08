@@ -87,3 +87,13 @@ phase2_deca_standardization_plan.pdf
 # Internal or local-only folders
 cluster_scripts/
 internal/
+ 
+# Local run scripts and temp files 
+run_*.bat 
+*.orig 
+*.local 
+enable_ssh_server.ps1 
+start_ssh_server.ps1 
+/archive/ 
+tools/audit_full.* 
+tools/screening_p975_p95.* 
