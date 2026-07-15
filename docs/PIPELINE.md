@@ -3,9 +3,10 @@
 ## Overview
 
 ```
-Raw Images → DECA Reconstruction → FLAME Params (.mat) → Phase2 Standardization → Output
-                  ↓                                               ↓
-           ArcFace Embeddings                            XGBoost Quality Scores
+Raw Images → Cleaning / Labels → Phase 1 Feature Extraction → Phase2 Standardization → Output
+                                    ├─ DECA / FLAME params + renders
+                                    ├─ L2CS gaze yaw/pitch/vector
+                                    └─ ArcFace identity embedding
 ```
 
 ## Stage 1: DECA Reconstruction
@@ -17,16 +18,23 @@ Raw Images → DECA Reconstruction → FLAME Params (.mat) → Phase2 Standardiz
 
 **Environment**: 5060 with CUDA
 
-## Stage 2: ArcFace Embedding Extraction
+## Stage 2: L2CS-Net Gaze Extraction
+
+**Input**: Original RGB face images
+**Output**: Per-image pitch, yaw, and gaze vector plus a 10K summary manifest
+
+**Status**: Rebuilt on Lenovo, 10,000/10,000 successful. Historical byte identity is not claimed because the original workstation is unavailable.
+
+## Stage 3: ArcFace Embedding Extraction
 
 **Script**: `tools/extract_arcface_embeddings.py`
 
 **Input**: Face images
 **Output**: ArcFace identity embeddings (used for identity verification)
 
-**Status**: [待确认] — Embeddings may have been lost from 2060, need regeneration
+**Status**: Rebuilt on Lenovo, 9,990/9,990 successful. Main threshold 0.1 recovered 9,968; retry threshold 0.05 recovered 22. Strict/full provenance is preserved.
 
-## Stage 3: Phase2 Training
+## Stage 4: Phase2 Training
 
 **Script**: `phase2/train_condition_generator.py`
 
@@ -35,14 +43,14 @@ Raw Images → DECA Reconstruction → FLAME Params (.mat) → Phase2 Standardiz
 
 **Multi-stage**: Stage 1 → Stage 2 → Stage 3 (curriculum learning or progressive training)
 
-## Stage 4: Phase2 Inference
+## Stage 5: Phase2 Inference
 
 **Script**: `phase2/infer_standardize_params.py`
 
 **Input**: DECA `.mat` outputs + trained checkpoint
 **Output**: Standardized FLAME parameters
 
-## Stage 5: Visualization
+## Stage 6: Visualization
 
 **Script**: `phase2/make_visualizations.py`, `phase2/render_single_comparison.py`
 

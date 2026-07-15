@@ -1,5 +1,33 @@
 # Operation Log
 
+## 2026-07-15 — Historical Phase 1 / Lenovo parity audit
+
+- **Agent**: Codex
+- **Tasks**:
+  - Reconciled user-provided history with PIL and prior verified workstation records
+  - Confirmed historical L2CS output had 10,000 gaze JSON files and a complete summary CSV
+  - Reclassified historical cleaning labels, L2CS, ArcFace, and render outputs as missing parity items on Lenovo
+  - Attempted `win-lenovo` SSH; `192.168.1.170:22` timed out
+  - Attempted old workstation tunnel `win-pub`; connection closed before inventory
+- **Files changed**: `docs/STATUS.md`, `docs/RECOVERY.md`, `docs/NEXT.md`, `docs/PIPELINE.md`, `docs/LOG.md`
+- **Outcome**: PIL now distinguishes historical completion from Lenovo-local completion; execution awaits SSH recovery
+
+## 2026-07-15 — Lenovo Phase 1 rebuild started
+
+- **Agent**: Codex
+- **Tasks**:
+  - Restored `win-lenovo` SSH and confirmed 10,000 source PNG files
+  - Installed InsightFace 1.0.1, ONNX Runtime 1.27.0, and L2CS-Net commit `4a0f978`
+  - Downloaded `L2CSNet_gaze360.pkl` and verified SHA256 `8a7f3480d868dd48261e1d59f915b0ef0bb33ea12ea00938fb2168f212080665`
+  - Recovered the 10 historical eye-invalid IDs and preserved them in `configs/phase1_eye_invalid_ids.txt`
+  - Completed 20-image ArcFace and L2CS smoke tests
+  - Started independent Windows scheduled tasks for full L2CS and ArcFace rebuilds
+  - Fixed scheduled L2CS startup by isolating `TEMP`, `TMP`, and `TORCHINDUCTOR_CACHE_DIR` from `C:\Windows\TEMP`
+  - Added resumable L2CS extraction, ArcFace include/exclude controls, and Phase 1 master-manifest tooling
+  - Started `FacePhase1-Finalizer` to automate retry, merge, provenance annotation, image hashing, and final manifest generation
+- **Active outputs**: `results/gaze_10k_l2cs_rebuilt/`, `results/arcface_p95_rebuilt/`
+- **Outcome**: Completed successfully. L2CS 10,000/10,000; ArcFace 9,990/9,990; Phase 1 master manifest contains 10,000 unique IDs and source hashes.
+
 ## 2026-07-08 14:15 — Session Start & Project Recovery Assessment
 
 - **Agent**: DeepSeek

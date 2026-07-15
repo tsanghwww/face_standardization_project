@@ -11,6 +11,7 @@ import argparse
 import csv
 import json
 import math
+import re
 import time
 from pathlib import Path
 
@@ -61,7 +62,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save-aligned", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--limit", default=0, type=int)
+    parser.add_argument("--exclude-ids", type=Path, help="Text file containing image IDs to skip.")
+    parser.add_argument("--include-ids", type=Path, help="Optional text file restricting extraction to listed IDs.")
     return parser.parse_args()
+
+
+def read_excluded_ids(path: Path | None) -> set[int]:
+    if path is None:
+        return set()
+    values: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        values.extend(re.split(r"[\s,]+", line.split("#", 1)[0].strip()))
+    return {int(value) for value in values if value}
 
 
 def read_screening_labels(path: Path) -> dict[int, str]:
@@ -140,7 +152,13 @@ def main() -> None:
         aligned_dir.mkdir(parents=True, exist_ok=True)
 
     labels = read_screening_labels(args.screening_report)
+    excluded_ids = read_excluded_ids(args.exclude_ids)
+    included_ids = read_excluded_ids(args.include_ids) if args.include_ids else None
     image_paths = sorted(images_dir.glob("*.png"), key=image_id_from_path)
+    source_image_count = len(image_paths)
+    if included_ids is not None:
+        image_paths = [path for path in image_paths if image_id_from_path(path) in included_ids]
+    image_paths = [path for path in image_paths if image_id_from_path(path) not in excluded_ids]
     if args.limit:
         image_paths = image_paths[: args.limit]
 
@@ -167,6 +185,11 @@ def main() -> None:
         "save_aligned": args.save_aligned,
         "resume": args.resume,
         "limit": args.limit,
+        "exclude_ids": str(args.exclude_ids) if args.exclude_ids else None,
+        "excluded_image_ids": sorted(excluded_ids),
+        "include_ids": str(args.include_ids) if args.include_ids else None,
+        "included_image_ids": sorted(included_ids) if included_ids is not None else None,
+        "source_image_count": source_image_count,
         "started_unix": started,
     }
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
@@ -182,6 +205,8 @@ def main() -> None:
     mode = "a" if args.resume and manifest_path.exists() else "w"
     counts = {
         "total_images_seen": len(image_paths),
+        "source_image_count": source_image_count,
+        "excluded_count": len(excluded_ids),
         "skipped_resume": 0,
         "success": 0,
         "fail": 0,

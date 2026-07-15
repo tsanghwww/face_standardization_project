@@ -19,8 +19,23 @@
 | Dataset (StyleGAN2 10000 images) | External backup → 5060 | ✅ In archive/ |
 | Git history | Mac remnants + new commits | ✅ Reconstructed |
 | [待確認] Original face dataset | Unknown | ⚠️ Status unclear |
-| [待確認] ArcFace embeddings | Unknown | ⚠️ Status unclear |
+| Historical data cleaning / p95 labels | Rebuilt on Lenovo | ✅ p95 and p97.5 labels joined into master manifest |
+| L2CS-Net gaze outputs | Rebuilt on Lenovo | ✅ 10,000/10,000 with explicit rebuilt provenance |
+| ArcFace embeddings + strict/full labels | Rebuilt on Lenovo | ✅ 9,990/9,990 after retry; strict/full labels restored |
 | [待確認] Experiment logs | Unknown | ⚠️ Status unclear |
+
+### Historical Phase 1 Evidence
+
+The pre-Lenovo workstation was verified on 2026-06-11 with these L2CS artifacts:
+
+- `H:\face_standardization_project\results\gaze_10k_l2cs\`
+- 10,000 `*_gaze.json` files
+- `l2cs_gaze_summary_10k.csv` with `image_id,pitch,yaw,gaze_x,gaze_y,gaze_z,status`
+- `gaze_10k_l2cs.zip`
+
+Historical cleaning used `screening_v3_p95` as the main p95 result. ArcFace used original RGB images, InsightFace `buffalo_l`, a main pass plus low-threshold retry, and preserved `arcface_stage`, `det_thresh`, `detector_score`, `use_for_train_strict`, and `use_for_train_full`. These facts are sufficient to regenerate the missing Lenovo artifacts when direct migration is unavailable.
+
+The Lenovo rebuild completed on 2026-07-15. Its canonical joined outputs are `results/phase1_parity/phase1_master_manifest.csv` and `phase1_master_summary.json`. Source images were retained; the 10 historical eye-invalid IDs are represented by `eye_valid=false` rather than physical deletion.
 
 ### Lessons Learned
 
