@@ -1,0 +1,11 @@
+# Historical eye-invalid exclusions recovered from the pre-Lenovo workstation.
+625
+3305
+3888
+4420
+4515
+4752
+7861
+8169
+8373
+9248

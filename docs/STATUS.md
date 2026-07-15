@@ -1,7 +1,7 @@
 # Project Status
 
-- **Last Updated**: 2026-07-08 22:10
-- **Current Phase**: ✅ Recovery Complete · PIL Operational · Bug Fixes
+- **Last Updated**: 2026-07-15
+- **Current Phase**: Phase 1 feature parity complete on win-lenovo
 
 ## 5060 Workstation Snapshot
 
@@ -52,11 +52,31 @@
 | Git & Code Sync | ✅ Complete | 3-way sync (Mac/5060/GitHub) |
 | PIL Setup | ✅ Complete | 24 files, 1300 lines, installed as skill |
 | BUG-003 Fix | ✅ Complete | kpt coordinate denormalization, landmark_score restored |
+| Data cleaning + class labels | ✅ Complete | p95=9,500 Pass / 500 Warn; p97.5=9,750 Pass / 250 Warn |
+| L2CS-Net gaze extraction | ✅ Complete | 10,000/10,000 successful; Gaze360 weight SHA256 recorded |
+| ArcFace identity extraction | ✅ Complete | 9,990/9,990 successful after 22 low-threshold retries |
+| Phase 1 master manifest | ✅ Complete | 10,000 unique IDs with source SHA256, cleaning, DECA, gaze, and identity fields |
+| DECA standardized re-rendering | ⚠️ Partial | Parameter inference exists; full normal/displacement/render parity set has not been verified on Lenovo |
 | [待确认] Next Research Phase | ⏳ Pending | |
+
+## Phase 1 Final Metrics
+
+| Metric | Value |
+|---|---:|
+| Source / unique IDs | 10,000 / 10,000 |
+| Eye-invalid exclusions | 10 |
+| DECA success | 10,000 |
+| L2CS success | 10,000 |
+| ArcFace main success | 9,968 |
+| ArcFace retry recovered | 22 |
+| ArcFace final success | 9,990 |
+| ArcFace strict train | 9,482 |
+| ArcFace full train | 9,499 |
+| Image hashes recorded | 10,000 |
 
 ## Blockers
 
-- None currently
+- None for Phase 1 parity. Historical workstation remains unavailable, so regenerated L2CS results retain the explicit `rebuilt` provenance label.
 
 ## Risks
 
@@ -69,11 +89,13 @@
 
 | Component | Status |
 |---|---|
-| 5060 SSH | ✅ win-lenovo reachable |
+| 5060 SSH | ✅ Reachable (`win-lenovo`) |
 | GitHub Push | ✅ SSH key configured |
 | Python venv | ✅ D:\face_standardization_project\.venv (5.1 GB) |
 | CUDA | ✅ RTX 5060, cu128 |
 | DECA models | ✅ deca_model.tar + FLAME present |
+| InsightFace | ✅ `buffalo_l`, ONNX Runtime CPU provider |
+| L2CS-Net | ✅ Official package commit `4a0f978`, Gaze360 weight SHA256 `8a7f3480...80665` |
 | D: free space | ✅ ~258 GB remaining |
 
 ## Latest Quality Metrics (200-sample spot check, after BUG-003 fix)
