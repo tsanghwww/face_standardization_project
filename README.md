@@ -2,9 +2,10 @@
 
 A face standardization research pipeline built around DECA, ArcFace, and quality-aware latent-space modeling for 3D face reconstruction, identity embedding extraction, dataset screening, and reproducible experiments.
 
-## Contributor
-@tsanghwww
-@H-1-m
+## Contributors
+
+- [@tsanghwww](https://github.com/tsanghwww)
+- [@H-1-m](https://github.com/H-1-m)
 
 ## Overview
 
