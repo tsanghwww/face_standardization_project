@@ -11,10 +11,17 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 
 from .dataset import Phase2Dataset, save_normalizer
-from .features import Phase2Sample, find_deca_mat_files, read_arcface_rows, sample_from_mat
+from .features import (
+    Phase2Sample,
+    apply_xgb_quality,
+    find_deca_mat_files,
+    read_arcface_rows,
+    read_xgb_rows,
+    sample_from_mat,
+)
 from .model import ConditionGenerator
 
 
@@ -34,6 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--no-augment", action="store_true")
+    parser.add_argument("--alpha-mode", default="learned", choices=["learned", "fixed_one"])
+    parser.add_argument("--exclude-ids-file", type=Path)
     return parser.parse_args()
 
 
@@ -47,44 +56,46 @@ def resolve_device(name: str) -> torch.device:
     return torch.device("cpu")
 
 
-def read_xgb_rows(path: Path | None) -> dict[str, dict[str, str]]:
-    if path is None or not path.exists():
-        return {}
-    with path.open("r", encoding="utf-8", newline="") as f:
-        return {row["image_id"]: row for row in csv.DictReader(f) if row.get("image_id")}
+def read_id_file(path: Path | None) -> set[str]:
+    if path is None:
+        return set()
+    return {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
 
 
-def _float(row: dict[str, str], key: str, default: float) -> float:
-    try:
-        value = float(row.get(key, ""))
-    except ValueError:
-        return default
-    return value if np.isfinite(value) else default
+def write_command_artifacts(out_dir: Path, args: argparse.Namespace) -> None:
+    """Persist config.json and exact_command.txt for experiment provenance."""
+    import sys as _sys
+
+    config = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}
+    (out_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    cmd = " ".join([_sys.executable, "-m", "phase2.train_condition_generator", *_sys.argv[1:]])
+    (out_dir / "exact_command.txt").write_text(cmd + "\n", encoding="utf-8")
 
 
-def apply_xgb_quality(sample: Phase2Sample, xgb_row: dict[str, str] | None, quality_source: str) -> Phase2Sample:
-    if not xgb_row:
-        return sample
-    metrics = dict(sample.metrics)
-    xgb_quality = _float(xgb_row, "xgb_quality_score", metrics["quality_score"])
-    if quality_source == "xgb":
-        metrics["quality_score"] = xgb_quality
-    elif quality_source == "blend":
-        metrics["quality_score"] = 0.5 * metrics["quality_score"] + 0.5 * xgb_quality
-    metrics["xgb_quality_score"] = xgb_quality
-    metrics["sample_weight"] = _float(xgb_row, "xgb_sample_weight", 1.0)
-    label = xgb_row.get("xgb_quality_label", "")
-    metrics["xgb_quality_class"] = {"low": 0.0, "medium": 1.0, "high": 2.0}.get(label, -1.0)
-    return Phase2Sample(image_id=sample.image_id, mat_path=sample.mat_path, params=sample.params, metrics=metrics)
+def make_split(n: int, val_ratio: float, seed: int) -> tuple[list[int], list[int]]:
+    """Deterministic train/val index split (identical across ablation groups)."""
+    val_len = max(1, int(n * val_ratio)) if n > 3 else 0
+    perm = torch.randperm(n, generator=torch.Generator().manual_seed(seed)).tolist()
+    return sorted(perm[:val_len]), sorted(perm[val_len:])
 
 
-def load_samples(results_dir: Path, arcface_manifest: Path | None, xgb_manifest: Path | None, quality_source: str):
+def load_samples(
+    results_dir: Path,
+    arcface_manifest: Path | None,
+    xgb_manifest: Path | None,
+    quality_source: str,
+    excluded_ids: set[str],
+):
     arcface = read_arcface_rows(arcface_manifest)
     xgb_rows = read_xgb_rows(xgb_manifest)
     mats = find_deca_mat_files(results_dir)
     if not mats:
         raise SystemExit(f"No .mat files found under {results_dir}")
-    return [apply_xgb_quality(sample_from_mat(path, arcface.get(path.stem)), xgb_rows.get(path.stem), quality_source) for path in mats]
+    return [
+        apply_xgb_quality(sample_from_mat(path, arcface.get(path.stem)), xgb_rows.get(path.stem), quality_source)
+        for path in mats
+        if path.stem not in excluded_ids
+    ]
 
 
 def normalizer_from_dataset(dataset: Phase2Dataset) -> tuple[np.ndarray, np.ndarray]:
@@ -119,9 +130,9 @@ def weighted_mean(values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
     return (values * weights).sum() / weights.sum().clamp_min(1e-6)
 
 
-def compute_loss(model: ConditionGenerator, batch: dict[str, torch.Tensor], mean: torch.Tensor, std: torch.Tensor, device: torch.device):
+def compute_loss(model: ConditionGenerator, batch: dict[str, torch.Tensor], mean: torch.Tensor, std: torch.Tensor, device: torch.device, training: bool = True):
     b = normalize_batch(batch, mean, std, device)
-    out = model(b["features"], b["expression"], b["pose"])
+    out = model(b["features"], b["expression"], b["pose"], alpha_mode="fixed_one" if model.alpha_mode == "fixed_one" else "learned")
     q = b["quality"]
     w = b["sample_weight"]
 
@@ -137,24 +148,39 @@ def compute_loss(model: ConditionGenerator, batch: dict[str, torch.Tensor], mean
         + out.target_jaw_pose.abs().mean()
     )
     alphas = torch.cat([out.alpha_expression, out.alpha_head_pose, out.alpha_jaw_pose], dim=1)
-    alpha_loss = weighted_mean((alphas - alpha_target(q)).pow(2).mean(dim=1, keepdim=True), w)
+    alpha_loss = (
+        weighted_mean((alphas - alpha_target(q)).pow(2).mean(dim=1, keepdim=True), w)
+        if model.alpha_mode == "learned"
+        else torch.zeros((), device=device)
+    )
     confidence_loss = weighted_mean((out.confidence - q).pow(2), w)
     reject_loss = weighted_mean(
         nn.functional.binary_cross_entropy(out.reject_score, b["reject_target"].clamp(0.0, 1.0), reduction="none"), w
     )
 
-    noise = torch.randn_like(b["features"]) * 0.015
-    out_noisy = model(b["features"] + noise, b["expression"], b["pose"])
-    smooth_per_sample = (
-        (out.standardized_expression - out_noisy.standardized_expression).pow(2).mean(dim=1, keepdim=True)
-        + (out.standardized_pose - out_noisy.standardized_pose).pow(2).mean(dim=1, keepdim=True)
-        + (alphas - torch.cat([out_noisy.alpha_expression, out_noisy.alpha_head_pose, out_noisy.alpha_jaw_pose], dim=1))
-        .pow(2)
-        .mean(dim=1, keepdim=True)
-    )
-    smooth_loss = weighted_mean(smooth_per_sample, w)
+    total = cond_loss + 0.03 * target_reg + 0.45 * alpha_loss + 0.35 * confidence_loss + 0.25 * reject_loss
+    if training:
+        # Smoothness regularization uses random feature noise; training only so
+        # that validation stays deterministic and reproducible.
+        noise = torch.randn_like(b["features"]) * 0.015
+        out_noisy = model(
+            b["features"] + noise,
+            b["expression"],
+            b["pose"],
+            alpha_mode="fixed_one" if model.alpha_mode == "fixed_one" else "learned",
+        )
+        smooth_per_sample = (
+            (out.standardized_expression - out_noisy.standardized_expression).pow(2).mean(dim=1, keepdim=True)
+            + (out.standardized_pose - out_noisy.standardized_pose).pow(2).mean(dim=1, keepdim=True)
+            + (alphas - torch.cat([out_noisy.alpha_expression, out_noisy.alpha_head_pose, out_noisy.alpha_jaw_pose], dim=1))
+            .pow(2)
+            .mean(dim=1, keepdim=True)
+        )
+        smooth_loss = weighted_mean(smooth_per_sample, w)
+        total = total + 0.10 * smooth_loss
+    else:
+        smooth_loss = torch.zeros((), device=device)
 
-    total = cond_loss + 0.03 * target_reg + 0.45 * alpha_loss + 0.35 * confidence_loss + 0.25 * reject_loss + 0.10 * smooth_loss
     metrics = {
         "loss": float(total.detach().cpu()),
         "cond": float(cond_loss.detach().cpu()),
@@ -173,7 +199,7 @@ def evaluate(model, loader, mean, std, device):
     count = 0
     with torch.no_grad():
         for batch in loader:
-            _, metrics = compute_loss(model, batch, mean, std, device)
+            _, metrics = compute_loss(model, batch, mean, std, device, training=False)
             bs = int(batch["features"].shape[0])
             count += bs
             for key, value in metrics.items():
@@ -187,28 +213,43 @@ def main() -> None:
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    samples = load_samples(args.deca_results_dir, args.arcface_manifest, args.xgb_quality_manifest, args.quality_source)
-    base_dataset = Phase2Dataset(samples, augment=False, seed=args.seed, stage=args.stage)
-    mean_np, std_np = normalizer_from_dataset(base_dataset)
-    dataset = Phase2Dataset(samples, augment=not args.no_augment, seed=args.seed, stage=args.stage)
+    excluded_ids = read_id_file(args.exclude_ids_file)
+    samples = load_samples(
+        args.deca_results_dir,
+        args.arcface_manifest,
+        args.xgb_quality_manifest,
+        args.quality_source,
+        excluded_ids,
+    )
+    n = len(samples)
+    # Fixed, deterministic split indices (identical across ablation groups).
+    val_indices, train_indices = make_split(n, args.val_ratio, args.seed)
+    if not train_indices:
+        raise SystemExit("Empty training split")
 
-    val_len = max(1, int(len(dataset) * args.val_ratio)) if len(dataset) > 3 else 0
-    train_len = len(dataset) - val_len
-    if val_len:
-        train_ds, val_ds = random_split(dataset, [train_len, val_len], generator=torch.Generator().manual_seed(args.seed))
-    else:
-        train_ds, val_ds = dataset, None
+    # normalizer from the un-augmented TRAINING subset only (never validation).
+    norm_dataset = Phase2Dataset([samples[i] for i in train_indices], augment=False, seed=args.seed, stage=args.stage)
+    mean_np, std_np = normalizer_from_dataset(norm_dataset)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, drop_last=False)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False) if val_ds is not None else None
+    train_dataset = Phase2Dataset([samples[i] for i in train_indices], augment=not args.no_augment, seed=args.seed, stage=args.stage)
+    val_dataset = Phase2Dataset([samples[i] for i in val_indices], augment=False, seed=args.seed, stage=args.stage)
+
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False) if val_dataset else None
     device = resolve_device(args.device)
     mean = torch.from_numpy(mean_np).to(device)
     std = torch.from_numpy(std_np).to(device)
     input_dim = int(mean_np.shape[0])
     model = ConditionGenerator(input_dim=input_dim, hidden_dim=args.hidden_dim).to(device)
+    model.alpha_mode = args.alpha_mode
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    write_command_artifacts(args.out_dir, args)
+    train_ids = [samples[i].image_id for i in train_indices]
+    val_ids = [samples[i].image_id for i in val_indices]
+    (args.out_dir / "train_ids.txt").write_text("\n".join(train_ids) + "\n", encoding="utf-8")
+    (args.out_dir / "val_ids.txt").write_text("\n".join(val_ids) + "\n", encoding="utf-8")
     save_normalizer(args.out_dir / "normalizer.npz", mean_np, std_np)
     history_path = args.out_dir / "train_history.csv"
     best_val = float("inf")
@@ -256,13 +297,17 @@ def main() -> None:
 
     summary = {
         "samples": len(samples),
-        "train_samples": train_len,
-        "val_samples": val_len,
+        "train_samples": len(train_indices),
+        "val_samples": len(val_indices),
         "input_dim": input_dim,
         "best_val_loss": best_val,
         "checkpoint": str(args.out_dir / "best_model.pt"),
         "normalizer": str(args.out_dir / "normalizer.npz"),
         "history": str(history_path),
+        "excluded_ids_file": str(args.exclude_ids_file) if args.exclude_ids_file else None,
+        "excluded_ids": len(excluded_ids),
+        "train_ids_file": str(args.out_dir / "train_ids.txt"),
+        "val_ids_file": str(args.out_dir / "val_ids.txt"),
     }
     (args.out_dir / "train_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

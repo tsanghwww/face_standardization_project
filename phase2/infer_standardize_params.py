@@ -10,7 +10,14 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .features import feature_vector, find_deca_mat_files, read_arcface_rows, sample_from_mat
+from .features import (
+    apply_xgb_quality,
+    feature_vector,
+    find_deca_mat_files,
+    read_arcface_rows,
+    read_xgb_rows,
+    sample_from_mat,
+)
 from .model import ConditionGenerator
 
 
@@ -19,6 +26,12 @@ FIELDS = [
     "mat_path",
     "out_npz",
     "quality_score",
+    "heuristic_quality_score",
+    "xgb_quality_score",
+    "xgb_quality_label",
+    "quality_source",
+    "quality_source_requested",
+    "quality_source_effective",
     "alpha_expression",
     "alpha_head_pose",
     "alpha_jaw_pose",
@@ -40,6 +53,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--deca-results-dir", required=True, type=Path)
     parser.add_argument("--checkpoint", required=True, type=Path)
     parser.add_argument("--arcface-manifest", type=Path)
+    parser.add_argument("--xgb-quality-manifest", type=Path)
+    parser.add_argument("--quality-source", default="heuristic", choices=["heuristic", "xgb", "blend"])
+    parser.add_argument("--alpha-mode", default="auto", choices=["auto", "learned", "fixed_one"])
+    parser.add_argument("--include-ids-file", type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
     parser.add_argument("--reject-threshold", type=float, default=0.60)
@@ -65,6 +82,16 @@ def decision(reject: float, confidence: float, reject_threshold: float, weak_thr
     return "standardize", ""
 
 
+def write_command_artifacts(out_dir: Path, args: argparse.Namespace) -> None:
+    """Persist config.json and exact_command.txt for experiment provenance."""
+    import sys as _sys
+
+    config = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}
+    (out_dir / "inference_config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    cmd = " ".join([_sys.executable, "-m", "phase2.infer_standardize_params", *_sys.argv[1:]])
+    (out_dir / "inference_exact_command.txt").write_text(cmd + "\n", encoding="utf-8")
+
+
 def main() -> None:
     args = parse_args()
     device = resolve_device(args.device)
@@ -75,25 +102,38 @@ def main() -> None:
     model = ConditionGenerator(input_dim=int(ckpt["input_dim"]), hidden_dim=int(ckpt["hidden_dim"])).to(device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
+    alpha_mode = args.alpha_mode
+    if alpha_mode == "auto":
+        alpha_mode = str(ckpt.get("config", {}).get("alpha_mode", "learned"))
     mean = torch.from_numpy(np.asarray(ckpt["feature_mean"], dtype=np.float32)).to(device)
     std = torch.from_numpy(np.asarray(ckpt["feature_std"], dtype=np.float32)).to(device)
 
     arcface = read_arcface_rows(args.arcface_manifest)
+    xgb_rows = read_xgb_rows(args.xgb_quality_manifest)
     mat_files = find_deca_mat_files(args.deca_results_dir)
+    if args.include_ids_file:
+        included_ids = {line.strip() for line in args.include_ids_file.read_text(encoding="utf-8").splitlines() if line.strip()}
+        mat_files = [path for path in mat_files if path.stem in included_ids]
     if not mat_files:
         raise SystemExit(f"No .mat files found under {args.deca_results_dir}")
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    write_command_artifacts(args.out_dir, args)
     params_dir = args.out_dir / "params"
     params_dir.mkdir(exist_ok=True)
     rows = []
     with torch.no_grad():
         for mat_path in mat_files:
-            sample = sample_from_mat(mat_path, arcface.get(mat_path.stem))
+            xgb_row = xgb_rows.get(mat_path.stem)
+            sample = apply_xgb_quality(
+                sample_from_mat(mat_path, arcface.get(mat_path.stem)),
+                xgb_row,
+                args.quality_source,
+            )
             feat = feature_vector(sample.params, sample.metrics)
             x = ((torch.from_numpy(feat).to(device).float()[None, :] - mean) / std)
             exp = torch.from_numpy(sample.params["expression"]).to(device).float()[None, :]
             pose = torch.from_numpy(sample.params["pose"]).to(device).float()[None, :]
-            out = model(x, exp, pose)
+            out = model(x, exp, pose, alpha_mode=alpha_mode)
             std_exp = out.standardized_expression[0].cpu().numpy().astype(np.float32)
             std_pose = out.standardized_pose[0].cpu().numpy().astype(np.float32)
             target_exp = out.target_expression[0].cpu().numpy().astype(np.float32)
@@ -135,6 +175,12 @@ def main() -> None:
                     "mat_path": str(sample.mat_path),
                     "out_npz": str(out_npz),
                     "quality_score": f"{sample.metrics['quality_score']:.6f}",
+                    "heuristic_quality_score": f"{sample.metrics.get('heuristic_quality_score', sample.metrics['quality_score']):.6f}",
+                    "xgb_quality_score": (f"{sample.metrics['xgb_quality_score']:.6f}" if "xgb_quality_score" in sample.metrics else ""),
+                    "xgb_quality_label": (xgb_row or {}).get("xgb_quality_label", "") or "external_unlabeled",
+                    "quality_source": args.quality_source,
+                    "quality_source_requested": args.quality_source,
+                    "quality_source_effective": args.quality_source if (args.quality_source == "heuristic" or xgb_row) else "heuristic",
                     "alpha_expression": f"{alphas[0]:.6f}",
                     "alpha_head_pose": f"{alphas[1]:.6f}",
                     "alpha_jaw_pose": f"{alphas[2]:.6f}",
@@ -163,6 +209,10 @@ def main() -> None:
         "reject": sum(1 for r in rows if r["decision"] == "reject"),
         "manifest": str(csv_path),
         "params_dir": str(params_dir),
+        "xgb_quality_manifest": str(args.xgb_quality_manifest) if args.xgb_quality_manifest else None,
+        "quality_source": args.quality_source,
+        "alpha_mode": alpha_mode,
+        "include_ids_file": str(args.include_ids_file) if args.include_ids_file else None,
     }
     (args.out_dir / "phase2_inference_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

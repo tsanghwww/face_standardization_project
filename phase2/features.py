@@ -134,6 +134,14 @@ def read_arcface_rows(path: Path | None) -> dict[str, dict[str, str]]:
         return {row["image_id"]: row for row in csv.DictReader(f) if row.get("image_id")}
 
 
+def read_xgb_rows(path: Path | None) -> dict[str, dict[str, str]]:
+    """Load optional Phase-zero XGBoost scores keyed by image ID."""
+    if path is None or not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8", newline="") as f:
+        return {row["image_id"]: row for row in csv.DictReader(f) if row.get("image_id")}
+
+
 def _float(row: dict[str, str], key: str, default: float) -> float:
     try:
         value = float(row.get(key, ""))
@@ -164,8 +172,13 @@ def compute_metrics(
     arcface_train_flag = 0.0
     if arcface_row:
         arcface_status = 1.0 if arcface_row.get("arcface_status") == "success" else 0.0
-        arcface_score = _float(arcface_row, "detector_score", 0.0)
-        arcface_train_flag = 1.0 if arcface_row.get("use_for_train", "").lower() == "true" else 0.0
+        arcface_score = _float(arcface_row, "arcface_detector_score", 0.0)
+        if arcface_score == 0.0:
+            arcface_score = _float(arcface_row, "detector_score", 0.0)
+        for key in ("use_for_train_strict", "use_for_train_full", "use_for_train"):
+            if arcface_row.get(key, "").strip().lower() == "true":
+                arcface_train_flag = 1.0
+                break
 
     pose_score = max(0.0, 1.0 - head_pose_norm / 0.9)
     exp_score = max(0.0, 1.0 - exp_norm / 0.22)
@@ -233,6 +246,31 @@ def sample_from_mat(mat_path: Path, arcface_row: dict[str, str] | None = None) -
     params, present = load_deca_params(mat_path)
     metrics = compute_metrics(params, mat_path, present, arcface_row)
     return Phase2Sample(image_id=mat_path.stem, mat_path=mat_path, params=params, metrics=metrics)
+
+
+def apply_xgb_quality(
+    sample: Phase2Sample,
+    xgb_row: dict[str, str] | None,
+    quality_source: str = "heuristic",
+) -> Phase2Sample:
+    """Attach XGBoost quality information and optionally use it as the model input quality."""
+    if quality_source not in {"heuristic", "xgb", "blend"}:
+        raise ValueError(f"Unknown quality_source: {quality_source}")
+    if not xgb_row:
+        return sample
+
+    metrics = dict(sample.metrics)
+    xgb_quality = _float(xgb_row, "xgb_quality_score", metrics["quality_score"])
+    metrics["heuristic_quality_score"] = metrics["quality_score"]
+    metrics["xgb_quality_score"] = xgb_quality
+    if quality_source == "xgb":
+        metrics["quality_score"] = xgb_quality
+    elif quality_source == "blend":
+        metrics["quality_score"] = 0.5 * metrics["quality_score"] + 0.5 * xgb_quality
+    metrics["sample_weight"] = _float(xgb_row, "xgb_sample_weight", 1.0)
+    label = xgb_row.get("xgb_quality_label", "")
+    metrics["xgb_quality_class"] = {"low": 0.0, "medium": 1.0, "high": 2.0}.get(label, -1.0)
+    return Phase2Sample(image_id=sample.image_id, mat_path=sample.mat_path, params=sample.params, metrics=metrics)
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:

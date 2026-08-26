@@ -39,7 +39,15 @@ class ConditionGenerator(nn.Module):
             nn.Linear(hidden_dim, 50 + 3 + 3 + 3 + 1 + 1),
         )
 
-    def forward(self, features: torch.Tensor, expression: torch.Tensor, pose: torch.Tensor) -> Phase2Output:
+    def forward(
+        self,
+        features: torch.Tensor,
+        expression: torch.Tensor,
+        pose: torch.Tensor,
+        alpha_mode: str = "learned",
+    ) -> Phase2Output:
+        if alpha_mode not in {"learned", "fixed_one"}:
+            raise ValueError(f"Unknown alpha_mode: {alpha_mode}")
         raw = self.backbone(features)
         idx = 0
         target_exp = raw[:, idx : idx + 50]
@@ -49,6 +57,8 @@ class ConditionGenerator(nn.Module):
         target_jaw = raw[:, idx : idx + 3]
         idx += 3
         alphas = torch.sigmoid(raw[:, idx : idx + 3])
+        if alpha_mode == "fixed_one":
+            alphas = torch.ones_like(alphas)
         idx += 3
         confidence = torch.sigmoid(raw[:, idx : idx + 1])
         idx += 1
@@ -73,4 +83,3 @@ class ConditionGenerator(nn.Module):
             standardized_expression=std_exp,
             standardized_pose=std_pose,
         )
-
