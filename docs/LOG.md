@@ -1,5 +1,16 @@
 # Operation Log
 
+## 2026-08-24 — 固定测试集 v2（COFW + AFLW 接入）
+
+- **Agent**: DeepSeek
+- **Tasks**:
+  - 解压并校验 AFLW2000-3D（2,000 张 + pose/pts68 标注长度一致）与 300W-LP（306,141 文件，随机 100 张 landmark/pose 抽样通过）
+  - 确认 COFW `COFW_test_color.mat` 为 MATLAB v7.3，装入 `h5py` 到项目 `.venv`，定位图像布局为 (C,W,H)
+  - 构建 `results/phase2_eval_fixed_20260824_v2/`：775 行清单 = v1 625 行（逐字段保真）+ 75 COFW + 75 AFLW（固定种子 20260824 随机抽样）
+  - `base_test_ids.txt`（400 个 stylegan2_base ID）与 v1 一致，供后续训练排除
+- **Files changed**: `phase2/build_fixed_eval_split_v2.py`, `tools/verify_external_datasets.py`, `datasets/external/EXTERNAL_DATASETS.md`, `docs/LOG.md`
+- **Outcome**: v2 校验通过（v1 零差异、150 张新图可解码、COFW 裁剪 75/75 含全标注、AFLW 副本字节一致）
+
 ## 2026-07-15 — Historical Phase 1 / Lenovo parity audit
 
 - **Agent**: Codex
