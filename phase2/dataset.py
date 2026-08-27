@@ -48,6 +48,17 @@ class Phase2Dataset(Dataset):
                 max(0.0, min(1.0, metrics.get("quality_score", 0.5) - 0.10 * head_norm - 0.06 * jaw_norm))
             )
         features = feature_vector(params, metrics)
+        outcome_context = np.asarray(
+            [
+                metrics.get("quality_score", 0.5),
+                metrics.get("xgb_quality_score", metrics.get("quality_score", 0.5)),
+                metrics.get("landmark_score", 0.0),
+                metrics.get("landmark_out_ratio", 1.0),
+                metrics.get("arcface_status", 0.0),
+                metrics.get("arcface_score", 0.0),
+            ],
+            dtype=np.float32,
+        )
         return {
             "image_id": sample.image_id,
             "mat_path": str(sample.mat_path),
@@ -57,6 +68,7 @@ class Phase2Dataset(Dataset):
             "quality": torch.tensor([metrics.get("quality_score", 0.5)], dtype=torch.float32),
             "reject_target": torch.tensor([1.0 - metrics.get("quality_score", 0.5)], dtype=torch.float32),
             "sample_weight": torch.tensor([sample_weight], dtype=torch.float32),
+            "outcome_context": torch.from_numpy(outcome_context),
         }
 
 

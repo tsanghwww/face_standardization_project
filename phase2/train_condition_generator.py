@@ -23,6 +23,8 @@ from .features import (
     sample_from_mat,
 )
 from .model import ConditionGenerator
+from .outcome_dataset import FEATURE_COLUMNS as OUTCOME_FEATURE_COLUMNS
+from .outcome_surrogate import OutcomeSurrogate
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,6 +45,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-augment", action="store_true")
     parser.add_argument("--alpha-mode", default="learned", choices=["learned", "fixed_one"])
     parser.add_argument("--exclude-ids-file", type=Path)
+    # Phase2.1 outcome supervision (default OFF -> Phase2 v1 behavior unchanged).
+    parser.add_argument("--outcome-manifest", type=Path, default=None)
+    parser.add_argument("--outcome-loss-weight", type=float, default=0.0)
+    parser.add_argument("--no-outcome-supervision", action="store_true")
+    parser.add_argument("--outcome-surrogate", type=Path)
+    parser.add_argument("--outcome-identity-weight", type=float, default=0.0)
+    parser.add_argument("--outcome-pose-weight", type=float, default=0.0)
+    parser.add_argument("--outcome-gaze-weight", type=float, default=0.0)
+    parser.add_argument("--outcome-render-failure-weight", type=float, default=0.0)
+    parser.add_argument("--outcome-identity-floor", type=float, default=-0.02)
+    parser.add_argument("--outcome-pose-improvement-floor", type=float, default=0.0)
+    parser.add_argument("--outcome-gaze-ceiling-deg", type=float, default=10.0)
+    parser.add_argument(
+        "--allow-outcome-validation-overlap",
+        "--allow-outcome-surrogate-val-overlap",
+        dest="allow_outcome_validation_overlap",
+        action="store_true",
+        help="Smoke diagnostics only; forbidden for formal experiments.",
+    )
     return parser.parse_args()
 
 
@@ -109,6 +130,9 @@ def normalizer_from_dataset(dataset: Phase2Dataset) -> tuple[np.ndarray, np.ndar
 
 
 def normalize_batch(batch: dict, mean: torch.Tensor, std: torch.Tensor, device: torch.device) -> dict[str, torch.Tensor]:
+    outcome_context = batch.get("outcome_context")
+    if outcome_context is None:
+        outcome_context = torch.zeros((batch["features"].shape[0], 6), dtype=torch.float32)
     return {
         "features": ((batch["features"].to(device) - mean) / std).float(),
         "expression": batch["expression"].to(device).float(),
@@ -116,6 +140,7 @@ def normalize_batch(batch: dict, mean: torch.Tensor, std: torch.Tensor, device: 
         "quality": batch["quality"].to(device).float(),
         "reject_target": batch["reject_target"].to(device).float(),
         "sample_weight": batch["sample_weight"].to(device).float(),
+        "outcome_context": outcome_context.to(device).float(),
     }
 
 
@@ -130,7 +155,38 @@ def weighted_mean(values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
     return (values * weights).sum() / weights.sum().clamp_min(1e-6)
 
 
-def compute_loss(model: ConditionGenerator, batch: dict[str, torch.Tensor], mean: torch.Tensor, std: torch.Tensor, device: torch.device, training: bool = True):
+def build_outcome_surrogate_features(batch: dict[str, torch.Tensor], output) -> torch.Tensor:
+    """Build the exact feature order used by OutcomeDataset, with live output norms."""
+    exp_norm = torch.linalg.vector_norm(output.standardized_expression, dim=1, keepdim=True) / np.sqrt(
+        output.standardized_expression.shape[1]
+    )
+    head_norm = torch.linalg.vector_norm(output.standardized_pose[:, :3], dim=1, keepdim=True)
+    jaw_norm = torch.linalg.vector_norm(output.standardized_pose[:, 3:], dim=1, keepdim=True)
+    return torch.cat(
+        [
+            batch["outcome_context"],
+            output.alpha_expression,
+            output.alpha_head_pose,
+            output.alpha_jaw_pose,
+            exp_norm,
+            head_norm,
+            jaw_norm,
+        ],
+        dim=1,
+    )
+
+
+def compute_loss(
+    model: ConditionGenerator,
+    batch: dict[str, torch.Tensor],
+    mean: torch.Tensor,
+    std: torch.Tensor,
+    device: torch.device,
+    training: bool = True,
+    outcome_lookup: dict | None = None,
+    outcome_weight: float = 0.0,
+    outcome_supervision: dict | None = None,
+):
     b = normalize_batch(batch, mean, std, device)
     out = model(b["features"], b["expression"], b["pose"], alpha_mode="fixed_one" if model.alpha_mode == "fixed_one" else "learned")
     q = b["quality"]
@@ -181,6 +237,52 @@ def compute_loss(model: ConditionGenerator, batch: dict[str, torch.Tensor], mean
     else:
         smooth_loss = torch.zeros((), device=device)
 
+    # Phase2.1 outcome supervision (off by default): push the model's quality
+    # confidence toward (1 - unsafe) for samples that have a rendered outcome.
+    # Exact loss form is a placeholder; the weight is a CLI-only knob.
+    outcome_loss = torch.zeros((), device=device)
+    if outcome_lookup is not None and outcome_weight > 0.0:
+        ids = list(batch.get("image_id", ()))
+        valid = [i for i, image_id in enumerate(ids) if outcome_lookup.get(image_id, {}).get("unsafe", "") in {"0", "1"}]
+        if valid:
+            unsafe = torch.tensor(
+                [float(outcome_lookup[ids[i]]["unsafe"]) for i in valid], device=device
+            ).unsqueeze(1)
+            target_conf = 1.0 - unsafe
+            outcome_loss = weighted_mean((out.confidence[valid] - target_conf).pow(2), w[valid])
+
+    total = total + outcome_weight * outcome_loss
+
+    surrogate_losses = {
+        "outcome_identity": torch.zeros((), device=device),
+        "outcome_pose": torch.zeros((), device=device),
+        "outcome_gaze": torch.zeros((), device=device),
+        "outcome_render_failure": torch.zeros((), device=device),
+    }
+    if outcome_supervision is not None:
+        live_features = build_outcome_surrogate_features(b, out)
+        normalized = (live_features - outcome_supervision["mean"]) / outcome_supervision["std"]
+        predicted = outcome_supervision["model"](normalized)
+        surrogate_losses["outcome_identity"] = weighted_mean(
+            torch.relu(outcome_supervision["identity_floor"] - predicted["identity"].unsqueeze(1)).pow(2), w
+        )
+        surrogate_losses["outcome_pose"] = weighted_mean(
+            torch.relu(outcome_supervision["pose_floor"] - predicted["pose"].unsqueeze(1)).pow(2), w
+        )
+        surrogate_losses["outcome_gaze"] = weighted_mean(
+            torch.relu(predicted["gaze"].unsqueeze(1) - outcome_supervision["gaze_ceiling"]).pow(2), w
+        )
+        surrogate_losses["outcome_render_failure"] = weighted_mean(
+            nn.functional.binary_cross_entropy_with_logits(
+                predicted["render_failure"].unsqueeze(1),
+                torch.zeros_like(out.confidence),
+                reduction="none",
+            ),
+            w,
+        )
+        for name, loss_value in surrogate_losses.items():
+            total = total + outcome_supervision["weights"][name] * loss_value
+
     metrics = {
         "loss": float(total.detach().cpu()),
         "cond": float(cond_loss.detach().cpu()),
@@ -189,22 +291,65 @@ def compute_loss(model: ConditionGenerator, batch: dict[str, torch.Tensor], mean
         "confidence": float(confidence_loss.detach().cpu()),
         "reject": float(reject_loss.detach().cpu()),
         "smooth": float(smooth_loss.detach().cpu()),
+        "outcome": float(outcome_loss.detach().cpu()),
+        **{name: float(value.detach().cpu()) for name, value in surrogate_losses.items()},
     }
     return total, metrics
 
 
-def evaluate(model, loader, mean, std, device):
+def evaluate(model, loader, mean, std, device, outcome_lookup=None, outcome_weight=0.0, outcome_supervision=None):
     model.eval()
     totals: dict[str, float] = {}
     count = 0
     with torch.no_grad():
         for batch in loader:
-            _, metrics = compute_loss(model, batch, mean, std, device, training=False)
+            _, metrics = compute_loss(
+                model, batch, mean, std, device, training=False,
+                outcome_lookup=outcome_lookup, outcome_weight=outcome_weight,
+                outcome_supervision=outcome_supervision,
+            )
             bs = int(batch["features"].shape[0])
             count += bs
             for key, value in metrics.items():
                 totals[key] = totals.get(key, 0.0) + value * bs
     return {key: value / max(count, 1) for key, value in totals.items()}
+
+
+def load_outcome_supervision(path: Path, device: torch.device, args: argparse.Namespace, val_ids: list[str]) -> dict:
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
+    if checkpoint.get("feature_columns") != OUTCOME_FEATURE_COLUMNS:
+        raise SystemExit("Outcome surrogate feature schema does not match the current trainer")
+    source_ids = set(checkpoint.get("train_image_ids", ())) | set(checkpoint.get("val_image_ids", ()))
+    overlap = source_ids & set(val_ids)
+    if overlap and not args.allow_outcome_validation_overlap:
+        raise SystemExit(
+            f"Outcome surrogate source overlaps condition-generator validation by {len(overlap)} IDs; "
+            "build surrogate outcomes from the condition-training partition"
+        )
+    surrogate = OutcomeSurrogate(
+        input_dim=int(checkpoint["input_dim"]),
+        hidden_dim=int(checkpoint["hidden_dim"]),
+    ).to(device)
+    surrogate.load_state_dict(checkpoint["model_state"])
+    surrogate.eval()
+    for parameter in surrogate.parameters():
+        parameter.requires_grad_(False)
+    weights = {
+        "outcome_identity": args.outcome_identity_weight,
+        "outcome_pose": args.outcome_pose_weight,
+        "outcome_gaze": args.outcome_gaze_weight,
+        "outcome_render_failure": args.outcome_render_failure_weight,
+    }
+    return {
+        "model": surrogate,
+        "mean": torch.as_tensor(checkpoint["feature_mean"], device=device),
+        "std": torch.as_tensor(checkpoint["feature_std"], device=device),
+        "weights": weights,
+        "identity_floor": args.outcome_identity_floor,
+        "pose_floor": args.outcome_pose_improvement_floor,
+        "gaze_ceiling": args.outcome_gaze_ceiling_deg,
+        "source_overlap_with_val": len(overlap),
+    }
 
 
 def main() -> None:
@@ -251,9 +396,43 @@ def main() -> None:
     (args.out_dir / "train_ids.txt").write_text("\n".join(train_ids) + "\n", encoding="utf-8")
     (args.out_dir / "val_ids.txt").write_text("\n".join(val_ids) + "\n", encoding="utf-8")
     save_normalizer(args.out_dir / "normalizer.npz", mean_np, std_np)
+
+    # Phase2.1 outcome supervision (off by default)
+    outcome_weight = args.outcome_loss_weight
+    if args.no_outcome_supervision:
+        outcome_weight = 0.0
+    outcome_lookup: dict | None = None
+    if args.outcome_manifest and outcome_weight > 0.0:
+        import csv as _csv
+
+        with args.outcome_manifest.open("r", encoding="utf-8-sig", newline="") as _f:
+            outcome_lookup = {row["image_id"]: row for row in _csv.DictReader(_f)}
+        label_ids = set(outcome_lookup)
+        label_val_overlap = label_ids & set(val_ids)
+        if label_val_overlap and not args.allow_outcome_validation_overlap:
+            raise SystemExit(
+                f"Outcome labels overlap condition-generator validation by {len(label_val_overlap)} IDs; "
+                "build supervision labels from the condition-training partition"
+            )
+        if not (label_ids & set(train_ids)):
+            raise SystemExit("Outcome manifest has no labels for the condition-generator training partition")
+    outcome_supervision = None
+    surrogate_weights = [
+        args.outcome_identity_weight,
+        args.outcome_pose_weight,
+        args.outcome_gaze_weight,
+        args.outcome_render_failure_weight,
+    ]
+    if not args.no_outcome_supervision and any(weight > 0.0 for weight in surrogate_weights):
+        if args.outcome_surrogate is None:
+            raise SystemExit("Positive outcome head weight requires --outcome-surrogate")
+        outcome_supervision = load_outcome_supervision(args.outcome_surrogate, device, args, val_ids)
     history_path = args.out_dir / "train_history.csv"
     best_val = float("inf")
-    history_fields = ["epoch", "split", "loss", "cond", "target_reg", "alpha", "confidence", "reject", "smooth"]
+    history_fields = [
+        "epoch", "split", "loss", "cond", "target_reg", "alpha", "confidence", "reject", "smooth", "outcome",
+        "outcome_identity", "outcome_pose", "outcome_gaze", "outcome_render_failure",
+    ]
     with history_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=history_fields)
         writer.writeheader()
@@ -263,7 +442,11 @@ def main() -> None:
             seen = 0
             for batch in train_loader:
                 optimizer.zero_grad(set_to_none=True)
-                loss, metrics = compute_loss(model, batch, mean, std, device)
+                loss, metrics = compute_loss(
+                    model, batch, mean, std, device, training=True,
+                    outcome_lookup=outcome_lookup, outcome_weight=outcome_weight,
+                    outcome_supervision=outcome_supervision,
+                )
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 3.0)
                 optimizer.step()
@@ -274,7 +457,11 @@ def main() -> None:
             train_metrics = {key: value / max(seen, 1) for key, value in totals.items()}
             writer.writerow({"epoch": epoch, "split": "train", **train_metrics})
 
-            val_metrics = evaluate(model, val_loader, mean, std, device) if val_loader is not None else train_metrics
+            val_metrics = evaluate(
+                model, val_loader, mean, std, device,
+                outcome_lookup=outcome_lookup, outcome_weight=outcome_weight,
+                outcome_supervision=outcome_supervision,
+            ) if val_loader is not None else train_metrics
             writer.writerow({"epoch": epoch, "split": "val", **val_metrics})
             f.flush()
             if val_metrics["loss"] < best_val:
@@ -308,6 +495,8 @@ def main() -> None:
         "excluded_ids": len(excluded_ids),
         "train_ids_file": str(args.out_dir / "train_ids.txt"),
         "val_ids_file": str(args.out_dir / "val_ids.txt"),
+        "outcome_surrogate": str(args.outcome_surrogate) if args.outcome_surrogate else None,
+        "outcome_supervision_active": outcome_supervision is not None,
     }
     (args.out_dir / "train_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
