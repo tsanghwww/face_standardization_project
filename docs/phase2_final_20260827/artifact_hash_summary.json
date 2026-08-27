@@ -1,0 +1,9 @@
+{
+  "algorithm": "SHA-256",
+  "entries": 66,
+  "verified": 66,
+  "all_verified": true,
+  "git_commit": "3ff9b7f8380d453e92ec14f683d886640cc5d8bc",
+  "scope": "Critical models, manifests, summaries, metrics, configs, split IDs, final report, exact command, and final figures.",
+  "excluded": "Raw datasets, model dependencies, per-image renders, caches, and virtual environments."
+}

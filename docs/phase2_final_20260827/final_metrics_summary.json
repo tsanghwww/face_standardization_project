@@ -1,0 +1,104 @@
+{
+  "protocol": {
+    "base_corpus": 10000,
+    "phase2_pool": 9600,
+    "train": 8160,
+    "validation": 1440,
+    "fixed_test": 775,
+    "fixed_available": 743,
+    "upstream_failure": 32,
+    "four_model_training_complete": true,
+    "test_leakage_overlap": 0
+  },
+  "full_vs_hard_zero": {
+    "arcface_cosine_full": 0.3687873014804845,
+    "arcface_cosine_hard_zero": 0.3651948546433378,
+    "paired_arcface_delta": 0.0035924468371467,
+    "paired_arcface_ci95": [
+      0.0014578527254374,
+      0.0057368056191117
+    ],
+    "paired_pose_norm_delta": -0.005254273216689,
+    "paired_gaze_delta_deg": -1.9634145000000005,
+    "end_to_end_accept_rate": 0.8141935483870968
+  },
+  "rescue": {
+    "paired_cases": 343,
+    "main_rescue_arcface_cosine_mean": 0.6650675034402331,
+    "main_rescue_gaze_delta_mean_deg": 24.119704215366568,
+    "main_rescue_gaze_delta_p95_deg": 80.8978176,
+    "technical_recovery": 32,
+    "valid_rescue": 0,
+    "fallback_coverage": 0.9587096774193548
+  },
+  "gate": {
+    "validation_n": 1440,
+    "validation_unsafe": 167,
+    "selected_model": "logistic",
+    "validation_models": [
+      {
+        "model": "reject_score",
+        "auroc": 0.5183827161074551,
+        "auprc": 0.1363736885981127,
+        "brier": 0.1329751164968465,
+        "ece_10bin": 0.16156221736111112
+      },
+      {
+        "model": "mean_reject_one_minus_confidence",
+        "auroc": 0.5182298403977591,
+        "auprc": 0.13631696376368738,
+        "brier": 0.1330085762632302,
+        "ece_10bin": 0.16164893680555556
+      },
+      {
+        "model": "logistic",
+        "auroc": 0.6049080158614428,
+        "auprc": 0.15904252739444225,
+        "brier": 0.10181765301607953,
+        "ece_10bin": 0.01271556792875652
+      }
+    ],
+    "validation_operating_points": [
+      {
+        "max_accepted_unsafe_rate": 0.05,
+        "threshold": 0.037779324301713685,
+        "accepted": 21,
+        "coverage": 0.014583333333333334,
+        "accepted_unsafe": 1,
+        "selective_risk": 0.047619047619047616
+      },
+      {
+        "max_accepted_unsafe_rate": 0.1,
+        "threshold": 0.1377921103861416,
+        "accepted": 1070,
+        "coverage": 0.7430555555555556,
+        "accepted_unsafe": 107,
+        "selective_risk": 0.1
+      },
+      {
+        "max_accepted_unsafe_rate": 0.15,
+        "threshold": 0.46410260698815,
+        "accepted": 1440,
+        "coverage": 1.0,
+        "accepted_unsafe": 167,
+        "selective_risk": 0.11597222222222223
+      }
+    ],
+    "fixed_available": 743,
+    "fixed_unsafe": 318,
+    "fixed_selective_risk": 0.4426605504587156,
+    "fixed_coverage": 0.5868102288021534,
+    "fixed_far": 0.6069182389937107,
+    "fixed_frr": 0.42823529411764705,
+    "deployment_qualified": false
+  },
+  "scope_note": "ArcFace, DECA re-encoding, and L2CS values are diagnostic metrics on DECA shape-detail renders, not human perceptual ground truth.",
+  "figures": {
+    "fig1_fixed_test_ablation": "D:\\face_standardization_project\\results\\phase2_final_20260827\\figures\\fig1_fixed_test_ablation.png",
+    "fig2_decision_coverage": "D:\\face_standardization_project\\results\\phase2_final_20260827\\figures\\fig2_decision_coverage.png",
+    "fig3_rescue_domain_shift": "D:\\face_standardization_project\\results\\phase2_final_20260827\\figures\\fig3_rescue_domain_shift.png",
+    "fig4_rescue_only_sensitivity": "D:\\face_standardization_project\\results\\phase2_final_20260827\\figures\\fig4_rescue_only_sensitivity.png",
+    "fig5_gate_calibration_and_transfer": "D:\\face_standardization_project\\results\\phase2_final_20260827\\figures\\fig5_gate_calibration_and_transfer.png",
+    "fig6_phase2_sample_accounting": "D:\\face_standardization_project\\results\\phase2_final_20260827\\figures\\fig6_phase2_sample_accounting.png"
+  }
+}

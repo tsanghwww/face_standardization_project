@@ -1,0 +1,1 @@
+D:\face_standardization_project\.venv\Scripts\python.exe -m phase2.generate_phase2_final_delivery --project-root D:\face_standardization_project --out-dir results\phase2_final_20260827
