@@ -55,6 +55,12 @@ python -m phase2.train_condition_generator --help
 python -m phase2.infer_standardize_params --help
 ```
 
+## Research Reports
+
+- [2026 Summer Work Report](docs/SUMMER_WORK_REPORT_2026.md)
+- [Phase2 Final Experimental Report](docs/phase2_final_20260827/PHASE2_FINAL_REPORT_20260827.md)
+- [Phase2.1 Protocol](docs/PHASE21_PROTOCOL.md)
+
 ## License Notice
 
 This repository includes code adapted from DECA. DECA is provided for non-commercial scientific research purposes; see `DECA/LICENSE` for details.
