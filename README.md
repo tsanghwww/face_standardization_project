@@ -17,6 +17,13 @@ This repository collects the code used for a face standardization research workf
 
 The repository intentionally does not include private datasets, experiment outputs, virtual environments, or large model assets.
 
+## Branch Policy
+
+- `main` is the integration baseline for Phase2 development, experiment execution, reproducible evaluation, and release-ready documentation.
+- `feature/*` branches are isolated contribution branches for team members. They are not experiment baselines and must not become the source of record for shared results.
+- Feature work is reviewed and integrated into `main` before it is used by the main research pipeline.
+- Commands, reports, and remote-machine runs should record the exact `main` commit used whenever possible.
+
 ## What Is Tracked
 
 - Source code and scripts.

@@ -45,6 +45,7 @@ FIELDS = [
     "eval_id", "source_group", "source_dataset", "xgb_quality_label", "method",
     "render_status", "arcface_status", "arcface_reference", "arcface_cosine", "deca_status",
     "deca_head_pose_norm", "deca_pose_delta_vs_original",
+    "deca_expression_norm", "deca_expression_delta_vs_original",
     "l2cs_status", "l2cs_pitch", "l2cs_yaw",
     "l2cs_gaze_delta_vs_source_deg", "l2cs_gaze_delta_vs_original_deg",
     "diagnostic", "failure_reason",
@@ -66,6 +67,9 @@ STAT_COLUMNS = [
     "deca_pose_norm_mean", "deca_pose_norm_median", "deca_pose_norm_p10", "deca_pose_norm_p90",
     "deca_pose_norm_ci95_lo", "deca_pose_norm_ci95_hi", "deca_pose_norm_n",
     "deca_pose_delta_vs_original_mean", "deca_pose_delta_vs_original_ci95_lo", "deca_pose_delta_vs_original_ci95_hi", "deca_pose_delta_vs_original_n",
+    "deca_expression_norm_mean", "deca_expression_norm_median", "deca_expression_norm_p10", "deca_expression_norm_p90",
+    "deca_expression_norm_ci95_lo", "deca_expression_norm_ci95_hi", "deca_expression_norm_n",
+    "deca_expression_delta_vs_original_mean", "deca_expression_delta_vs_original_ci95_lo", "deca_expression_delta_vs_original_ci95_hi", "deca_expression_delta_vs_original_n",
     "l2cs_gaze_delta_vs_source_deg_mean", "l2cs_gaze_delta_vs_source_deg_ci95_lo", "l2cs_gaze_delta_vs_source_deg_ci95_hi", "l2cs_gaze_delta_vs_source_deg_n",
     "l2cs_gaze_delta_vs_original_deg_mean", "l2cs_gaze_delta_vs_original_deg_ci95_lo", "l2cs_gaze_delta_vs_original_deg_ci95_hi", "l2cs_gaze_delta_vs_original_deg_n",
     "l2cs_failure_rate", "deca_failure_rate",
@@ -248,6 +252,8 @@ def compute_stats(rows: list[dict], n_total: int, seed: int, n_boot: int) -> dic
     cos_e, cos_v = _collect(rows, "arcface_cosine")
     pose_e, pose_v = _collect(rows, "deca_head_pose_norm")
     delta_e, delta_v = _collect(rows, "deca_pose_delta_vs_original")
+    exp_e, exp_v = _collect(rows, "deca_expression_norm")
+    exp_delta_e, exp_delta_v = _collect(rows, "deca_expression_delta_vs_original")
     gsrc_e, gsrc_v = _collect(rows, "l2cs_gaze_delta_vs_source_deg")
     gorig_e, gorig_v = _collect(rows, "l2cs_gaze_delta_vs_original_deg")
 
@@ -265,6 +271,8 @@ def compute_stats(rows: list[dict], n_total: int, seed: int, n_boot: int) -> dic
         "arcface_cosine_ci95": [arc_lo, arc_hi],
         "deca_head_pose_norm": metric_block(pose_e, pose_v, seed, n_boot),
         "deca_pose_delta_vs_original": metric_block(delta_e, delta_v, seed, n_boot),
+        "deca_expression_norm": metric_block(exp_e, exp_v, seed, n_boot),
+        "deca_expression_delta_vs_original": metric_block(exp_delta_e, exp_delta_v, seed, n_boot),
         "l2cs_gaze_delta_vs_source_deg": metric_block(gsrc_e, gsrc_v, seed, n_boot),
         "l2cs_gaze_delta_vs_original_deg": metric_block(gorig_e, gorig_v, seed, n_boot),
         "l2cs_failure_rate": round(rate(l2cs_fail), 6),
@@ -302,6 +310,19 @@ def flatten_stats(stats: dict) -> dict:
     row["deca_pose_delta_vs_original_ci95_lo"] = dd.get("ci95_lo", "")
     row["deca_pose_delta_vs_original_ci95_hi"] = dd.get("ci95_hi", "")
     row["deca_pose_delta_vs_original_n"] = dd.get("n", "")
+    de = stats.get("deca_expression_norm", {})
+    row["deca_expression_norm_mean"] = de.get("mean", "")
+    row["deca_expression_norm_median"] = de.get("median", "")
+    row["deca_expression_norm_p10"] = de.get("p10", "")
+    row["deca_expression_norm_p90"] = de.get("p90", "")
+    row["deca_expression_norm_ci95_lo"] = de.get("ci95_lo", "")
+    row["deca_expression_norm_ci95_hi"] = de.get("ci95_hi", "")
+    row["deca_expression_norm_n"] = de.get("n", "")
+    ded = stats.get("deca_expression_delta_vs_original", {})
+    row["deca_expression_delta_vs_original_mean"] = ded.get("mean", "")
+    row["deca_expression_delta_vs_original_ci95_lo"] = ded.get("ci95_lo", "")
+    row["deca_expression_delta_vs_original_ci95_hi"] = ded.get("ci95_hi", "")
+    row["deca_expression_delta_vs_original_n"] = ded.get("n", "")
     gs = stats.get("l2cs_gaze_delta_vs_source_deg", {})
     row["l2cs_gaze_delta_vs_source_deg_mean"] = gs.get("mean", "")
     row["l2cs_gaze_delta_vs_source_deg_ci95_lo"] = gs.get("ci95_lo", "")
@@ -371,16 +392,20 @@ def main() -> None:
     orig_emb_cache: dict[str, tuple[np.ndarray | None, str]] = {}
     orig_gaze_cache: dict[str, tuple[float | None, float | None]] = {}
     orig_pose_cache: dict[str, float | None] = {}
+    orig_exp_cache: dict[str, float | None] = {}
 
-    def deca_pose_on(image_path: Path) -> tuple[float | None, str]:
+    def deca_metrics_on(image_path: Path) -> tuple[float | None, float | None, str]:
         try:
             image = load_image(image_path)
             tensor = torch.from_numpy(whole_image_tensor(image)).to(device)[None, ...]
             with torch.no_grad():
                 codedict = deca.encode(tensor)
-            return float(torch.linalg.vector_norm(codedict["pose"][0, :3])), "success"
+            pose_norm = float(torch.linalg.vector_norm(codedict["pose"][0, :3]))
+            expression = codedict["exp"][0]
+            exp_norm = float(torch.linalg.vector_norm(expression) / math.sqrt(expression.numel()))
+            return pose_norm, exp_norm, "success"
         except Exception as exc:  # noqa: BLE001
-            return None, type(exc).__name__
+            return None, None, type(exc).__name__
 
     for eval_index, eval_id_row in enumerate(test_rows):
         eval_id = eval_id_row["eval_id"]
@@ -437,12 +462,15 @@ def main() -> None:
                 reasons.append(f"render_arcface={arc_status}")
 
             # DECA pose on render (diagnostic)
-            pose_norm, pose_status = deca_pose_on(image_path)
+            pose_norm, exp_norm, pose_status = deca_metrics_on(image_path)
             if pose_norm is not None:
                 row["deca_status"] = "success"
                 row["deca_head_pose_norm"] = f"{pose_norm:.6f}"
                 if method == "original":
                     orig_pose_cache[eval_id] = pose_norm
+                    orig_exp_cache[eval_id] = exp_norm
+                if exp_norm is not None:
+                    row["deca_expression_norm"] = f"{exp_norm:.6f}"
             else:
                 row["deca_status"] = "fail"
                 reasons.append(f"deca:{pose_status}")
@@ -478,12 +506,17 @@ def main() -> None:
                 orig_path = render.get(path_key("original"))
                 if orig_path and render.get(status_key("original")) == "success":
                     if eval_id not in orig_pose_cache:
-                        orig_pose_cache[eval_id] = deca_pose_on(Path(orig_path))[0]
+                        orig_pose_cache[eval_id] = deca_metrics_on(Path(orig_path))[0]
                     orig_norm = orig_pose_cache[eval_id]
                     if orig_norm is not None:
                         row["deca_pose_delta_vs_original"] = f"{abs(float(row['deca_head_pose_norm']) - orig_norm):.6f}"
                     else:
                         reasons.append("deca_orig_delta:unavailable")
+                    if eval_id not in orig_exp_cache:
+                        orig_exp_cache[eval_id] = deca_metrics_on(Path(orig_path))[1]
+                    orig_exp = orig_exp_cache[eval_id]
+                    if orig_exp is not None and row.get("deca_expression_norm"):
+                        row["deca_expression_delta_vs_original"] = f"{abs(float(row['deca_expression_norm']) - orig_exp):.6f}"
 
             if reasons:
                 row["failure_reason"] = ";".join(reasons)
