@@ -10,7 +10,7 @@
 
 ## 1. 工作摘要
 
-本项目研究如何利用 DECA 提取的人脸三维参数，在有限且相对标准化的训练数据条件下，生成更稳健的人脸标准化条件。系统以 DECA 的 expression、pose、camera 和 lighting 参数为主要输入与控制对象，以 ArcFace 身份相似度、头部姿态、gaze 变化和渲染成功率作为评估信号。
+本工作研究如何利用 DECA 提取的人脸三维参数，在有限且相对标准化的训练数据条件下，生成更稳健的人脸标准化条件。系统以 DECA 的 expression、pose、camera 和 lighting 参数为主要输入与控制对象，以 ArcFace 身份相似度、头部姿态、gaze 变化和渲染成功率作为评估信号。
 
 暑期工作从旧实验恢复、运行环境迁移和基础错误修复开始，随后完成了 Phase1 一致性恢复、Phase2 数据协议重建、外部困难样本引入、四组正式消融训练、固定测试集评估、rescue 敏感性实验、安全 Gate 校准，以及 Phase2.1 outcome-supervised 训练框架。
 
