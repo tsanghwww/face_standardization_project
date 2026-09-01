@@ -4,6 +4,10 @@
 
 状态：设计冻结候选（尚未启动正式训练）
 
+> 2026-09-01 更新：结合 GazeNeRF 与 ReDirTrans 后，Phase3 的实施架构已优化为
+> `Face Control Adapter + Eye Gaze Adapter + factor residual editor`。详细模块、训练入口、
+> 产物契约和验收标准以 `docs/PHASE3_IMPLEMENTATION_PLAN.md` 为准；本文件保留研究层面的总协议。
+
 ## Material Passport
 
 - 研究主题：基于 3D 融合控制与隐空间扩散模型的人脸标准化重构及视线解耦研究
@@ -12,9 +16,9 @@
 - 当前硬件：RTX 5060 Laptop，约 8 GB 显存
 - 证据边界：本文件定义训练与验证协议，不代表扩散模型或视线解耦已经完成
 
-## 1. 研究目标重新定位
+## 1. 研究目标定位
 
-Phase2 的作用是生成质量感知的标准化 3D 参数，不是最终输出模型。Phase3 才对应题目中的核心系统：
+Phase2 的作用是生成质量感知的标准化 3D 参数。Phase3 对应题目中的核心系统：
 
 $$
 x_{src}, c_{3D}, e_{id}, c_{gaze}, c_{quality}
@@ -88,12 +92,13 @@ $$
 在当前显存与数据规模下，不从零训练 diffusion U-Net。采用以下结构：
 
 1. 冻结预训练 latent diffusion 的 VAE 与 U-Net 主干。
-2. 训练轻量 3D Control Adapter，将空间条件注入 U-Net 多尺度残差。
-3. 训练 Identity Adapter，将身份 token 注入 cross-attention。
-4. 训练 Gaze Adapter，将 gaze token 与 eye-region feature 注入眼区 gated attention。
-5. 只在联合微调阶段启用 rank 8 的 U-Net attention LoRA，其余骨干保持冻结。
+2. 训练 `Face Control Adapter`，只接收 normal/depth/landmark/face mask 与 head、expression、lighting 条件。
+3. 训练独立的 `Eye Gaze Adapter`，只接收 eye mask、gaze heatmap 与 head-local gaze token，并在眼区 gated injection。
+4. 按 ReDirTrans 的 source-status removal / target-status addition 思想，分别构造 head 与 gaze 的分层残差；两个因子不共享投影头。
+5. 训练 `Identity Adapter`，以独立 cross-attention 注入 ArcFace identity token。
+6. 只在联合微调阶段启用 rank 8 的 U-Net attention LoRA，其余骨干保持冻结。
 
-该选择与 DiffusionRig 的像素对齐 physical buffer 结果以及 DisControlFace 的“冻结预训练骨干、单独训练显式控制网络”思想一致，但本项目增加独立 gaze/head 条件与双向 leakage 监督。
+该选择结合了 DiffusionRig/DisControlFace 的 3D spatial control、GazeNeRF 的 face/eye separation、ReDirTrans 的 factor residual replacement，以及 IP-Adapter 的 decoupled cross-attention。GazeNeRF 的眼球 3D volume rotation 不会被原样套到普通 U-Net 通道；本项目采用眼区空间方向场、旋转 token 与 masked residual injection 实现适配。
 
 ## 4. 无配对数据下的训练样本构造
 
@@ -140,7 +145,7 @@ $$
 
 ### Phase3.1：Reconstruction warm-up
 
-冻结 VAE、U-Net 和 evaluator，只训练 3D Control Adapter、Identity Adapter 与 condition encoders。
+先完成 VAE round-trip audit，再冻结 VAE、U-Net 和 evaluator，只训练 Face Control Adapter、Identity Adapter 与 condition encoders。训练 source anchor 使用 VAE reconstruction 的重新测量结果，避免把 VAE 自身造成的 gaze/head shift 归因于后续 adapter。
 
 $$
 \mathcal L_{3.1}=\mathcal L_{noise}+\lambda_{rec}\mathcal L_{rec}+\lambda_{id}\mathcal L_{id}.
@@ -150,7 +155,7 @@ $$
 
 ### Phase3.2：Gaze branch warm-up
 
-加入 eye-masked batch，只训练 Gaze Adapter、eye gate 和 gaze condition encoder；其他 adapter 可冻结或使用更低学习率。
+加入 eye-masked batch，只训练 Eye Gaze Adapter、eye gate 和 gaze condition encoder；其他 adapter 冻结或使用更低学习率。眼区和非眼区分别计算 reconstruction/perceptual loss，避免小面积眼区梯度被全脸损失淹没。
 
 $$
 \mathcal L_{3.2}=\mathcal L_{noise}+\lambda_{eye}\mathcal L_{eye}+\lambda_g\mathcal L_{gaze\_head}+\lambda_{id}\mathcal L_{id}.
@@ -160,7 +165,7 @@ $$
 
 ### Phase3.3：Disentanglement intervention training
 
-加入 head-only 与 gaze-only batch：
+加入 ReDirTrans-style source-remove/target-add residual、head-only 与 gaze-only batch：
 
 $$
 \mathcal L_{dis}=\lambda_{h\rightarrow g}\mathcal L_{h\rightarrow g}+\lambda_{g\rightarrow h}\mathcal L_{g\rightarrow h}.
@@ -275,6 +280,8 @@ No-Go：
 
 ## 10. 论文支撑
 
+- [GazeNeRF, CVPR 2023](https://arxiv.org/abs/2212.04823)：支持 face/eye two-stream、眼区定向控制、区域监督与 head-coordinate gaze；本项目不直接复现其 NeRF 体渲染或把普通 U-Net 通道视为 3D 向量。
+- [ReDirTrans, CVPR 2023](https://openaccess.thecvf.com/content/CVPR2023/html/Jin_ReDirTrans_Latent-to-Latent_Translation_for_Gaze_and_Head_Redirection_CVPR_2023_paper.html)：支持 source-status removal / target-status addition、head/gaze 独立投影、分层编辑权重与双向 induced-error 评价。
 - [DiffusionRig, CVPR 2023](https://diffusionrig.github.io/)：支持使用 DECA 像素对齐 physical buffers 引导 diffusion，并显示空间条件优于简单参数向量条件。
 - [DisControlFace, ACM MM 2024](https://discontrolface.github.io/)：支持冻结预训练 diffusion backbone、训练显式控制网络与随机语义遮挡。
 - [L2CS-Net](https://arxiv.org/abs/2203.03339)：提供非受限环境 gaze pseudo-label，但不单独证明 disentanglement。
