@@ -53,18 +53,27 @@ def resolve_path(value: str) -> tuple[str, bool]:
     return str(path), path.exists()
 
 
-def load_split_map(split_dir: Path | None) -> dict[str, str]:
-    if split_dir is None or not split_dir.exists():
-        return {}
+def load_split_map(split_dir: Path | None, split_file: Path | None) -> dict[str, str]:
     out: dict[str, str] = {}
-    for split in ("train", "val", "test"):
-        path = split_dir / f"{split}_ids.txt"
-        if not path.exists():
-            continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            image_id = line.strip()
-            if image_id:
-                out[image_id] = split
+    if split_dir is not None:
+        if not split_dir.exists():
+            raise SystemExit(f"Split directory not found: {split_dir}")
+        for split in ("train", "val", "test"):
+            path = split_dir / f"{split}_ids.txt"
+            if not path.exists():
+                continue
+            for line in path.read_text(encoding="utf-8").splitlines():
+                image_id = line.strip()
+                if image_id:
+                    out[image_id] = split
+
+    if split_file is not None:
+        if not split_file.exists():
+            raise SystemExit(f"Split file not found: {split_file}")
+        payload = json.loads(split_file.read_text(encoding="utf-8"))
+        for split in ("train", "val", "test"):
+            for image_id in payload.get(split, []):
+                out[str(image_id)] = split
     return out
 
 
@@ -76,12 +85,12 @@ def build_row(
 ) -> dict[str, Any]:
     image_id = first_present(base, ["image_id", "eval_id", "id", "file_id"])
     source_raw = first_present(base, ["source_image", "image_path", "path", "file_path", "img_path"])
-    deca_raw = first_present(base, ["deca_mat", "mat_path", "deca_path"])
+    deca_raw = first_present(base, ["deca_mat", "deca_mat_path", "mat_path", "deca_path"])
     source_path, source_exists = resolve_path(source_raw)
     deca_path, deca_exists = resolve_path(deca_raw)
 
     phase2 = phase2 or {}
-    phase2_raw = first_present(phase2, ["phase2_npz", "npz_path", "standardized_npz", "output_npz"])
+    phase2_raw = first_present(phase2, ["phase2_npz", "out_npz", "npz_path", "standardized_npz", "output_npz"])
     phase2_path, phase2_exists = resolve_path(phase2_raw)
 
     missing: list[str] = []
@@ -89,7 +98,7 @@ def build_row(
         missing.append("source_image")
     if not deca_exists:
         missing.append("deca_mat")
-    if phase2_raw and not phase2_exists:
+    if phase2 and not phase2_exists:
         missing.append("phase2_npz")
     if not phase2:
         missing.append("phase2_row")
@@ -107,15 +116,25 @@ def build_row(
         "image_id": image_id,
         "split": split_map.get(image_id, first_present(base, ["split"]) or default_split),
         "source_image": source_path if source_exists else source_raw,
+        "source_image_exists": source_exists,
         "deca_mat": deca_path if deca_exists else deca_raw,
+        "deca_mat_exists": deca_exists,
         "phase2_npz": phase2_path if phase2_exists else phase2_raw,
-        "depth_map": "",
-        "normal_map": "",
-        "landmark_map": "",
-        "face_mask": "",
-        "arcface_embedding": first_present(base, ["arcface_embedding", "embedding_path"]),
+        "phase2_npz_exists": phase2_exists,
+        "depth_map": None,
+        "normal_map": None,
+        "landmark_map": None,
+        "face_mask": None,
+        "modalities_todo": ["depth_map", "normal_map", "landmark_map", "face_mask"],
+        "arcface_embedding": first_present(base, ["arcface_embedding", "arcface_embedding_path", "embedding_path"]),
         "gaze_pitch": parse_float(first_present(base, ["gaze_pitch", "pitch"])),
         "gaze_yaw": parse_float(first_present(base, ["gaze_yaw", "yaw"])),
+        "alpha_expression": parse_float(first_present(phase2, ["alpha_expression"])),
+        "alpha_head_pose": parse_float(first_present(phase2, ["alpha_head_pose"])),
+        "alpha_jaw_pose": parse_float(first_present(phase2, ["alpha_jaw_pose"])),
+        "standardized_exp_norm": parse_float(first_present(phase2, ["standardized_exp_norm"])),
+        "standardized_head_pose_norm": parse_float(first_present(phase2, ["standardized_head_pose_norm"])),
+        "standardized_jaw_pose_norm": parse_float(first_present(phase2, ["standardized_jaw_pose_norm"])),
         "quality_score": parse_float(first_present(phase2, ["xgb_quality_score", "quality_score"])),
         "quality_label": first_present(phase2, ["xgb_quality_label", "quality_label"]),
         "phase2_confidence": parse_float(first_present(phase2, ["confidence", "phase2_confidence"])),
@@ -138,7 +157,9 @@ def main() -> None:
     parser.add_argument("--phase1-manifest", required=True, type=Path)
     parser.add_argument("--phase2-manifest", type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
-    parser.add_argument("--split-dir", type=Path)
+    split_group = parser.add_mutually_exclusive_group()
+    split_group.add_argument("--split-dir", type=Path)
+    split_group.add_argument("--split-file", type=Path, help="JSON object containing train/val/test ID lists")
     parser.add_argument("--default-split", default="train", choices=["train", "val", "test"])
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -146,7 +167,7 @@ def main() -> None:
     base_rows = read_csv(args.phase1_manifest)
     phase2_rows = read_csv(args.phase2_manifest)
     phase2_by_id = {first_present(row, ["image_id", "eval_id", "id"]): row for row in phase2_rows}
-    split_map = load_split_map(args.split_dir)
+    split_map = load_split_map(args.split_dir, args.split_file)
 
     out_rows = [build_row(row, phase2_by_id.get(first_present(row, ["image_id", "eval_id", "id", "file_id"])), split_map, args.default_split) for row in base_rows]
 
@@ -158,8 +179,13 @@ def main() -> None:
     summary = {
         "dry_run": args.dry_run,
         "n_rows": len(out_rows),
+        "n_total": len(out_rows),
         "status_counts": {status: sum(row["status"] == status for row in out_rows) for status in sorted({row["status"] for row in out_rows})},
         "split_counts": {split: sum(row["split"] == split for row in out_rows) for split in ("train", "val", "test")},
+        "missing_field_counts": {
+            field: sum(field in row["missing_fields"] for row in out_rows)
+            for field in sorted({field for row in out_rows for field in row["missing_fields"]})
+        },
         "phase2_manifest_used": str(args.phase2_manifest) if args.phase2_manifest else "",
         "scope_note": "interface skeleton; condition maps are placeholders",
     }
