@@ -1,6 +1,6 @@
 # Downstream Condition Design
 
-Date: 2026-08-31
+Date: 2026-09-01
 
 ## Scope
 
@@ -18,7 +18,9 @@ This document defines candidate conditioning signals for future downstream image
 | Phase2 standardized vector | vector-like | MLP adapter / cross-attention token | Phase2 inference | Must be filtered conservatively |
 | Phase2 alpha/confidence/reject | vector-like | diagnostic or adapter feature | Phase2 inference | Current Gate is diagnostic, not safety-certified |
 | ArcFace identity embedding | vector-like | identity condition or evaluation | ArcFace extractor | Detector failures and privacy sensitivity |
-| L2CS gaze vector | vector-like | evaluation or optional condition | L2CS | Gaze labels are pseudo-labels, not ground truth |
+| Camera-frame gaze vector | vector-like | measurement and coordinate conversion | L2CS | Entangles head rotation and eye-in-head gaze |
+| Head-local gaze vector | vector-like | independent gaze condition | L2CS + validated head rotation | Pseudo-label and coordinate-convention errors |
+| Target head rotation | vector/matrix | head-pose condition | Phase2/experiment target | Must remain separate from gaze target |
 
 ## Head Pose Versus Eye Gaze
 
@@ -26,11 +28,15 @@ Head pose and eye gaze are different variables.
 
 DECA pose mainly describes global head orientation and jaw/neck-related pose terms in the reconstructed face model. L2CS gaze estimates where the eyes are looking. A face can have frontal head pose but side gaze, or side head pose with gaze toward the camera.
 
+Phase3 therefore uses the decomposition $\mathbf{g}_{head}=R_h^\top\mathbf{g}_{cam}$, where $R_h$ maps head coordinates to camera coordinates. The condition interface keeps target head rotation and target eye-in-head gaze as separate factors.
+
 Therefore:
 
 - Pose standardization should be measured with DECA/L2CS head-pose diagnostics.
-- Gaze behavior should be measured separately.
-- The project should not claim gaze disentanglement without ground-truth gaze labels or a controlled gaze objective.
+- Head-only interventions must preserve eye-in-head gaze.
+- Gaze-only interventions must preserve head pose.
+- Bidirectional leakage and identity preservation must be measured before claiming successful disentanglement.
+- L2CS/DECA pseudo-label experiments may establish an engineering protocol, while stronger scientific claims require independent paired or ground-truth validation.
 
 ## Recommended First Downstream Setup
 

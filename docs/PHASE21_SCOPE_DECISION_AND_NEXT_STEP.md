@@ -59,7 +59,7 @@ This means building:
 
 - A downstream condition dataset schema.
 - A manifest builder that joins source image, DECA parameters, Phase2 standardized parameters, ArcFace identity data, gaze data, and quality metadata.
-- Evaluation skeletons for identity preservation, pose standardization, and gaze behavior.
+- Evaluation interfaces for identity preservation, pose standardization, and gaze/head-pose disentanglement.
 - A future ablation plan for comparing hard-zero, Phase2 parameters, condition maps, and identity/gaze conditioning.
 
 This step is suitable for the current project because it does not require collecting more external data immediately, and it turns the completed Phase2 outputs into a reusable interface for future work.

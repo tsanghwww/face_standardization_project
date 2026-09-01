@@ -28,6 +28,17 @@ Each row represents one source face sample and its available conditioning artifa
   "arcface_embedding": "",
   "gaze_pitch": null,
   "gaze_yaw": null,
+  "gaze_camera_x": null,
+  "gaze_camera_y": null,
+  "gaze_camera_z": null,
+  "gaze_head_x": null,
+  "gaze_head_y": null,
+  "gaze_head_z": null,
+  "target_gaze_head_x": null,
+  "target_gaze_head_y": null,
+  "target_gaze_head_z": null,
+  "gaze_policy": "preserve_eye_in_head",
+  "gaze_coordinate_status": "pending_head_rotation",
   "alpha_expression": null,
   "alpha_head_pose": null,
   "alpha_jaw_pose": null,
@@ -72,6 +83,11 @@ Required fields must be present in every JSONL row. Missing paths should be repr
 | `arcface_embedding` | string | ArcFace extractor | Identity condition or evaluation |
 | `gaze_pitch` | number/null | L2CS | Gaze diagnostic |
 | `gaze_yaw` | number/null | L2CS | Gaze diagnostic |
+| `gaze_camera_x/y/z` | number/null | L2CS | Visual axis in the L2CS camera frame |
+| `gaze_head_x/y/z` | number/null | L2CS + head rotation | Eye-in-head gaze after coordinate transformation |
+| `target_gaze_head_x/y/z` | number/null | experiment policy | Eye-in-head gaze target, independent of target head pose |
+| `gaze_policy` | string | experiment config | `preserve_eye_in_head`, `canonical_eye_in_head`, or controlled target |
+| `gaze_coordinate_status` | string | geometry stage | Whether camera/head coordinate conversion is complete |
 | `alpha_expression` | number/null | Phase2 inference | Expression normalization strength |
 | `alpha_head_pose` | number/null | Phase2 inference | Head-pose normalization strength |
 | `alpha_jaw_pose` | number/null | Phase2 inference | Jaw-pose normalization strength |
@@ -93,6 +109,7 @@ Required fields must be present in every JSONL row. Missing paths should be repr
 - Missing labels or decisions: `""`
 - Missing artifacts must be listed in `missing_fields`.
 - Missing values must not be filled with `0`, because zero may be a valid pose, gaze, or score value.
+- `gaze_head_*` must remain `null` until a validated head-to-camera rotation is available; camera-frame L2CS angles must not be relabeled as eye-in-head gaze.
 
 ## Split Rules
 

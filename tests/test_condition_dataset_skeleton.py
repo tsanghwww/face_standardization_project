@@ -29,7 +29,7 @@ def write_fixture(root: Path) -> None:
     with (root / "phase1.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
-            fieldnames=["image_id", "image_path", "deca_mat_path", "pitch", "yaw", "arcface_embedding_path"],
+            fieldnames=["image_id", "image_path", "deca_mat_path", "pitch", "yaw", "gaze_x", "gaze_y", "gaze_z", "arcface_embedding_path"],
         )
         writer.writeheader()
         writer.writerows(
@@ -40,6 +40,9 @@ def write_fixture(root: Path) -> None:
                     "deca_mat_path": str(root / "deca.mat"),
                     "pitch": "0.1",
                     "yaw": "-0.2",
+                    "gaze_x": "0.197677",
+                    "gaze_y": "-0.099833",
+                    "gaze_z": "-0.975170",
                     "arcface_embedding_path": str(root / "embedding.npy"),
                 },
                 {
@@ -119,6 +122,10 @@ def test_condition_dataset_and_evaluator_skeletons() -> None:
         assert complete["deca_mat_exists"] is True
         assert complete["phase2_npz_exists"] is True
         assert complete["alpha_expression"] == 0.5
+        assert complete["gaze_camera_x"] == 0.197677
+        assert complete["gaze_head_x"] is None
+        assert complete["gaze_policy"] == "preserve_eye_in_head"
+        assert complete["gaze_coordinate_status"] == "pending_head_rotation"
         assert complete["depth_map"] is None
         assert complete["modalities_todo"] == ["depth_map", "normal_map", "landmark_map", "face_mask"]
 
@@ -138,11 +145,16 @@ def test_condition_dataset_and_evaluator_skeletons() -> None:
         assert summary["missing_field_counts"]["phase2_npz"] == 1
 
         evaluators = [
-            ("evaluate_identity_preservation.py", "identity_metrics.csv", "identity_summary.json"),
-            ("evaluate_pose_standardization.py", "pose_metrics.csv", "pose_summary.json"),
-            ("evaluate_gaze_behavior.py", "gaze_metrics.csv", "gaze_summary.json"),
+            ("evaluate_identity_preservation.py", "identity_metrics.csv", "identity_summary.json", "placeholder"),
+            ("evaluate_pose_standardization.py", "pose_metrics.csv", "pose_summary.json", "placeholder"),
+            (
+                "evaluate_gaze_behavior.py",
+                "gaze_metrics.csv",
+                "gaze_summary.json",
+                "source geometry only; output disentanglement metrics not computed",
+            ),
         ]
-        for script, metrics_name, summary_name in evaluators:
+        for script, metrics_name, summary_name, expected_status in evaluators:
             evaluator_output = root / script.removesuffix(".py")
             run(
                 [
@@ -156,16 +168,39 @@ def test_condition_dataset_and_evaluator_skeletons() -> None:
             )
             assert (evaluator_output / metrics_name).exists()
             evaluator_summary = json.loads((evaluator_output / summary_name).read_text(encoding="utf-8"))
-            assert evaluator_summary["status"] == "placeholder"
+            assert evaluator_summary["status"] == expected_status
 
         gaze_summary = json.loads(
             (root / "evaluate_gaze_behavior" / "gaze_summary.json").read_text(encoding="utf-8")
         )
-        assert "no claim of gaze disentanglement" in gaze_summary["scope_note"]
+        assert "targets gaze/head-pose disentanglement" in gaze_summary["scope_note"]
+        assert "not evidence" in gaze_summary["scope_note"]
+
+
+def test_gaze_coordinate_disentanglement_geometry() -> None:
+    sys.path.insert(0, str(PROJECT / "eval"))
+    from gaze_geometry import (  # pylint: disable=import-outside-toplevel
+        angular_error_deg,
+        axis_angle_to_matrix,
+        camera_to_head_gaze,
+        head_to_camera_gaze,
+        l2cs_angles_to_camera_vector,
+    )
+
+    gaze_head = l2cs_angles_to_camera_vector(0.1, -0.2)
+    first_rotation = axis_angle_to_matrix([0.0, 0.35, 0.0])
+    second_rotation = axis_angle_to_matrix([-0.2, 0.0, 0.0])
+
+    first_camera = head_to_camera_gaze(gaze_head, first_rotation)
+    second_camera = head_to_camera_gaze(gaze_head, second_rotation)
+    assert angular_error_deg(first_camera, second_camera) > 1.0
+    assert angular_error_deg(camera_to_head_gaze(first_camera, first_rotation), gaze_head) < 1e-6
+    assert angular_error_deg(camera_to_head_gaze(second_camera, second_rotation), gaze_head) < 1e-6
 
 
 def main() -> None:
     test_condition_dataset_and_evaluator_skeletons()
+    test_gaze_coordinate_disentanglement_geometry()
     print("CONDITION DATASET SKELETON SMOKE PASSED")
 
 
