@@ -143,6 +143,7 @@ def test_condition_dataset_and_evaluator_skeletons() -> None:
         assert summary["split_counts"] == {"train": 1, "val": 1, "test": 1}
         assert summary["missing_field_counts"]["source_image"] == 2
         assert summary["missing_field_counts"]["phase2_npz"] == 1
+        assert summary["gaze_policy"] == "preserve_eye_in_head"
 
         evaluators = [
             ("evaluate_identity_preservation.py", "identity_metrics.csv", "identity_summary.json", "placeholder"),

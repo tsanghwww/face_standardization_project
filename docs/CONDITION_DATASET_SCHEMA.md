@@ -86,7 +86,7 @@ Required fields must be present in every JSONL row. Missing paths should be repr
 | `gaze_camera_x/y/z` | number/null | L2CS | Visual axis in the L2CS camera frame |
 | `gaze_head_x/y/z` | number/null | L2CS + head rotation | Eye-in-head gaze after coordinate transformation |
 | `target_gaze_head_x/y/z` | number/null | experiment policy | Eye-in-head gaze target, independent of target head pose |
-| `gaze_policy` | string | experiment config | `preserve_eye_in_head`, `canonical_eye_in_head`, or controlled target |
+| `gaze_policy` | string | experiment config | `preserve_eye_in_head`, `canonical_camera_gaze`, or `controlled_head_local` |
 | `gaze_coordinate_status` | string | geometry stage | Whether camera/head coordinate conversion is complete |
 | `alpha_expression` | number/null | Phase2 inference | Expression normalization strength |
 | `alpha_head_pose` | number/null | Phase2 inference | Head-pose normalization strength |
@@ -110,6 +110,7 @@ Required fields must be present in every JSONL row. Missing paths should be repr
 - Missing artifacts must be listed in `missing_fields`.
 - Missing values must not be filled with `0`, because zero may be a valid pose, gaze, or score value.
 - `gaze_head_*` must remain `null` until a validated head-to-camera rotation is available; camera-frame L2CS angles must not be relabeled as eye-in-head gaze.
+- The builder accepts `--gaze-policy preserve_eye_in_head|canonical_camera_gaze|controlled_head_local`; the selected value is saved in every row and in `dataset_summary.json`.
 
 ## Split Rules
 

@@ -61,6 +61,7 @@ python -m phase2.infer_standardize_params --help
 - [Phase2 Final Experimental Report](docs/phase2_final_20260827/PHASE2_FINAL_REPORT_20260827.md)
 - [Phase2.1 Protocol](docs/PHASE21_PROTOCOL.md)
 - [Phase2.1 Scope Decision and Next Step](docs/PHASE21_SCOPE_DECISION_AND_NEXT_STEP.md)
+- [Phase3 Latent Diffusion Training Plan](docs/PHASE3_LATENT_DIFFUSION_TRAINING_PLAN.md)
 
 ## License Notice
 

@@ -82,6 +82,7 @@ def build_row(
     phase2: dict[str, str] | None,
     split_map: dict[str, str],
     default_split: str,
+    gaze_policy: str,
 ) -> dict[str, Any]:
     image_id = first_present(base, ["image_id", "eval_id", "id", "file_id"])
     source_raw = first_present(base, ["source_image", "image_path", "path", "file_path", "img_path"])
@@ -138,7 +139,7 @@ def build_row(
         "target_gaze_head_x": None,
         "target_gaze_head_y": None,
         "target_gaze_head_z": None,
-        "gaze_policy": "preserve_eye_in_head",
+        "gaze_policy": gaze_policy,
         "gaze_coordinate_status": "pending_head_rotation",
         "alpha_expression": parse_float(first_present(phase2, ["alpha_expression"])),
         "alpha_head_pose": parse_float(first_present(phase2, ["alpha_head_pose"])),
@@ -172,6 +173,11 @@ def main() -> None:
     split_group.add_argument("--split-dir", type=Path)
     split_group.add_argument("--split-file", type=Path, help="JSON object containing train/val/test ID lists")
     parser.add_argument("--default-split", default="train", choices=["train", "val", "test"])
+    parser.add_argument(
+        "--gaze-policy",
+        default="preserve_eye_in_head",
+        choices=["preserve_eye_in_head", "canonical_camera_gaze", "controlled_head_local"],
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -180,7 +186,16 @@ def main() -> None:
     phase2_by_id = {first_present(row, ["image_id", "eval_id", "id"]): row for row in phase2_rows}
     split_map = load_split_map(args.split_dir, args.split_file)
 
-    out_rows = [build_row(row, phase2_by_id.get(first_present(row, ["image_id", "eval_id", "id", "file_id"])), split_map, args.default_split) for row in base_rows]
+    out_rows = [
+        build_row(
+            row,
+            phase2_by_id.get(first_present(row, ["image_id", "eval_id", "id", "file_id"])),
+            split_map,
+            args.default_split,
+            args.gaze_policy,
+        )
+        for row in base_rows
+    ]
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     for split in ("train", "val", "test"):
@@ -198,6 +213,7 @@ def main() -> None:
             for field in sorted({field for row in out_rows for field in row["missing_fields"]})
         },
         "phase2_manifest_used": str(args.phase2_manifest) if args.phase2_manifest else "",
+        "gaze_policy": args.gaze_policy,
         "scope_note": "interface skeleton; condition maps are placeholders",
     }
     (args.out_dir / "dataset_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")

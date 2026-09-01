@@ -84,10 +84,11 @@ Go:
 - Start downstream interface and evaluation skeletons.
 - Use current Phase2 outputs for exploratory manifests.
 - Keep all safety claims conservative.
+- After the Phase3.0 condition/coordinate gate passes, start a bounded frozen-backbone adapter pilot defined in `PHASE3_LATENT_DIFFUSION_TRAINING_PLAN.md`.
 
 No-go:
 
-- Do not start full diffusion or ControlNet training yet.
+- Do not train a full diffusion backbone from scratch or start a formal Phase3 run before the Phase3.0 gate passes.
 - Do not merge rescue outputs into the primary training/evaluation path.
 - Do not tune Gate thresholds on the 775 fixed test set.
 - Do not describe current Phase2.1 Gate as deployment-qualified.
