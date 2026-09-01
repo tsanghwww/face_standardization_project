@@ -58,14 +58,20 @@ def load_split_map(split_dir: Path | None, split_file: Path | None) -> dict[str,
     if split_dir is not None:
         if not split_dir.exists():
             raise SystemExit(f"Split directory not found: {split_dir}")
-        for split in ("train", "val", "test"):
-            path = split_dir / f"{split}_ids.txt"
-            if not path.exists():
-                continue
-            for line in path.read_text(encoding="utf-8").splitlines():
-                image_id = line.strip()
-                if image_id:
-                    out[image_id] = split
+        split_files = {
+            "train": ("train_ids.txt",),
+            "val": ("val_ids.txt", "validation_ids.txt"),
+            "test": ("test_ids.txt", "fixed_test_base_ids.txt"),
+        }
+        for split, names in split_files.items():
+            for name in names:
+                path = split_dir / name
+                if not path.exists():
+                    continue
+                for line in path.read_text(encoding="utf-8").splitlines():
+                    image_id = line.strip()
+                    if image_id:
+                        out[image_id] = split
 
     if split_file is not None:
         if not split_file.exists():
@@ -80,6 +86,7 @@ def load_split_map(split_dir: Path | None, split_file: Path | None) -> dict[str,
 def build_row(
     base: dict[str, str],
     phase2: dict[str, str] | None,
+    condition_cache: dict[str, str] | None,
     split_map: dict[str, str],
     default_split: str,
     gaze_policy: str,
@@ -91,6 +98,7 @@ def build_row(
     deca_path, deca_exists = resolve_path(deca_raw)
 
     phase2 = phase2 or {}
+    condition_cache = condition_cache or {}
     phase2_raw = first_present(phase2, ["phase2_npz", "out_npz", "npz_path", "standardized_npz", "output_npz"])
     phase2_path, phase2_exists = resolve_path(phase2_raw)
 
@@ -113,6 +121,33 @@ def build_row(
     else:
         status = "available"
 
+    cache_columns = {
+        "depth_map": "target_depth",
+        "normal_map": "target_normal",
+        "landmark_map": "target_landmark",
+        "face_mask": "target_face_mask",
+        "eye_mask": "target_eye_mask",
+        "gaze_heatmap": "target_gaze_heatmap",
+    }
+    coordinate_status = first_present(condition_cache, ["coordinate_status"]) or "pending_head_rotation"
+    modality_fields: dict[str, str] = {}
+    for name, column in cache_columns.items():
+        raw = first_present(condition_cache, [column])
+        if name == "gaze_heatmap" and coordinate_status != "approved":
+            raw = ""
+        resolved, exists = resolve_path(raw)
+        modality_fields[name] = resolved if exists else ""
+        if raw and not exists:
+            missing.append(name)
+    modalities_todo = [name for name, value in modality_fields.items() if not value]
+    gaze_values = {
+        name: parse_float(first_present(condition_cache, [name])) if coordinate_status == "approved" else None
+        for name in (
+            "gaze_head_x", "gaze_head_y", "gaze_head_z",
+            "target_gaze_head_x", "target_gaze_head_y", "target_gaze_head_z",
+        )
+    }
+
     return {
         "image_id": image_id,
         "split": split_map.get(image_id, first_present(base, ["split"]) or default_split),
@@ -122,25 +157,17 @@ def build_row(
         "deca_mat_exists": deca_exists,
         "phase2_npz": phase2_path if phase2_exists else phase2_raw,
         "phase2_npz_exists": phase2_exists,
-        "depth_map": None,
-        "normal_map": None,
-        "landmark_map": None,
-        "face_mask": None,
-        "modalities_todo": ["depth_map", "normal_map", "landmark_map", "face_mask"],
+        **{name: value or None for name, value in modality_fields.items()},
+        "modalities_todo": modalities_todo,
         "arcface_embedding": first_present(base, ["arcface_embedding", "arcface_embedding_path", "embedding_path"]),
         "gaze_pitch": parse_float(first_present(base, ["gaze_pitch", "pitch"])),
         "gaze_yaw": parse_float(first_present(base, ["gaze_yaw", "yaw"])),
         "gaze_camera_x": parse_float(first_present(base, ["gaze_camera_x", "gaze_x"])),
         "gaze_camera_y": parse_float(first_present(base, ["gaze_camera_y", "gaze_y"])),
         "gaze_camera_z": parse_float(first_present(base, ["gaze_camera_z", "gaze_z"])),
-        "gaze_head_x": None,
-        "gaze_head_y": None,
-        "gaze_head_z": None,
-        "target_gaze_head_x": None,
-        "target_gaze_head_y": None,
-        "target_gaze_head_z": None,
+        **gaze_values,
         "gaze_policy": gaze_policy,
-        "gaze_coordinate_status": "pending_head_rotation",
+        "gaze_coordinate_status": coordinate_status,
         "alpha_expression": parse_float(first_present(phase2, ["alpha_expression"])),
         "alpha_head_pose": parse_float(first_present(phase2, ["alpha_head_pose"])),
         "alpha_jaw_pose": parse_float(first_present(phase2, ["alpha_jaw_pose"])),
@@ -151,7 +178,7 @@ def build_row(
         "quality_label": first_present(phase2, ["xgb_quality_label", "quality_label"]),
         "phase2_confidence": parse_float(first_present(phase2, ["confidence", "phase2_confidence"])),
         "phase2_reject_score": parse_float(first_present(phase2, ["reject_score", "phase2_reject_score"])),
-        "phase2_gate_decision": first_present(phase2, ["gate_decision", "phase2_gate_decision"]),
+        "phase2_gate_decision": first_present(phase2, ["decision", "gate_decision", "phase2_gate_decision"]),
         "rescue_source": False,
         "status": status,
         "missing_fields": missing,
@@ -168,6 +195,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--phase1-manifest", required=True, type=Path)
     parser.add_argument("--phase2-manifest", type=Path)
+    parser.add_argument("--condition-cache-manifest", type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     split_group = parser.add_mutually_exclusive_group()
     split_group.add_argument("--split-dir", type=Path)
@@ -183,13 +211,16 @@ def main() -> None:
 
     base_rows = read_csv(args.phase1_manifest)
     phase2_rows = read_csv(args.phase2_manifest)
+    condition_rows = read_csv(args.condition_cache_manifest)
     phase2_by_id = {first_present(row, ["image_id", "eval_id", "id"]): row for row in phase2_rows}
+    condition_by_id = {first_present(row, ["image_id", "eval_id", "id"]): row for row in condition_rows}
     split_map = load_split_map(args.split_dir, args.split_file)
 
     out_rows = [
         build_row(
             row,
             phase2_by_id.get(first_present(row, ["image_id", "eval_id", "id", "file_id"])),
+            condition_by_id.get(first_present(row, ["image_id", "eval_id", "id", "file_id"])),
             split_map,
             args.default_split,
             args.gaze_policy,
@@ -214,7 +245,8 @@ def main() -> None:
         },
         "phase2_manifest_used": str(args.phase2_manifest) if args.phase2_manifest else "",
         "gaze_policy": args.gaze_policy,
-        "scope_note": "interface skeleton; condition maps are placeholders",
+        "condition_cache_manifest_used": str(args.condition_cache_manifest) if args.condition_cache_manifest else "",
+        "scope_note": "condition maps remain null unless a generated cache is supplied",
     }
     (args.out_dir / "dataset_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(summary, indent=2, ensure_ascii=False))

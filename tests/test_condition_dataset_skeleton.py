@@ -127,7 +127,9 @@ def test_condition_dataset_and_evaluator_skeletons() -> None:
         assert complete["gaze_policy"] == "preserve_eye_in_head"
         assert complete["gaze_coordinate_status"] == "pending_head_rotation"
         assert complete["depth_map"] is None
-        assert complete["modalities_todo"] == ["depth_map", "normal_map", "landmark_map", "face_mask"]
+        assert complete["modalities_todo"] == [
+            "depth_map", "normal_map", "landmark_map", "face_mask", "eye_mask", "gaze_heatmap"
+        ]
 
         empty_phase2 = read_jsonl(output / "val.jsonl")[0]
         assert empty_phase2["status"] == "missing_source"
