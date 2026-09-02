@@ -5,6 +5,8 @@
 .Trashes
 .vscode/
 .idea/
+# Obsidian workspace config
+docs/.obsidian/
 missfont.log
 *.aux
 *.out
