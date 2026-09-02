@@ -81,6 +81,7 @@ phase2_deca_standardization_plan.pdf
 /results/
 /datasets/
 /data/
+/models/
 
 # Private planning / office documents
 *.docx

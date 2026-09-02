@@ -1,0 +1,12 @@
+# Phase3 (VAE round-trip audit) minimal dependencies — verified 2026-09-01.
+# Installed into the existing .venv WITHOUT changing PyTorch/CUDA (torch 2.11.0+cu128).
+# Do NOT modify Phase1/Phase2 requirements; this file is additive.
+#
+# Install command used:
+#   .venv\Scripts\python.exe -m pip install diffusers==0.40.0 safetensors==0.8.0 huggingface-hub==1.29.0 lpips==0.1.4
+#   (diffusers pulls huggingface-hub + safetensors; transformers/accelerate are NOT
+#    required for AutoencoderKL-only round-trip and are intentionally omitted)
+diffusers==0.40.0
+safetensors==0.8.0
+huggingface-hub==1.29.0
+lpips==0.1.4
