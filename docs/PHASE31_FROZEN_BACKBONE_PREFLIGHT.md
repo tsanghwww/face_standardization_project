@@ -4,9 +4,11 @@ Date: 2026-09-02
 
 ## Scope
 
-This stage prepares a bounded 32-sample validation-only overfit experiment. It
-does not train a diffusion adapter and does not establish gaze disentanglement
-or generalization. The 775-sample fixed test remains evaluation-only.
+This stage prepared a bounded 32-sample validation-only interface audit. These
+validation IDs must not be used for optimizer updates. Actual reconstruction
+smoke training uses a separately selected 32-sample train-only subset, described
+in `PHASE31_RECONSTRUCTION_SMOKE.md`. The 775-sample fixed test remains
+evaluation-only.
 
 The frozen backbone is
 `stable-diffusion-v1-5/stable-diffusion-v1-5`. Its UNet, scheduler, tokenizer,
@@ -73,6 +75,6 @@ $py -m phase3.preflight_sd15_backbone `
 ## Entry Gate
 
 Adapter work may start only after the real preflight passes. The first training
-step is a 32-sample overfit diagnostic with the UNet and VAE frozen. It must not
-use the fixed test for checkpoint selection. A gaze loss or gaze control channel
+step is a 32-sample train-only overfit diagnostic with the UNet and VAE frozen.
+It must not use validation or fixed-test samples for optimizer updates. A gaze loss or gaze control channel
 must remain disabled until the head-local coordinate convention is approved.
