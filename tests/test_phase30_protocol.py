@@ -89,12 +89,13 @@ def test_split_leakage_fails_closed() -> None:
 def test_unapproved_gaze_is_not_exposed_to_training() -> None:
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp)
-        paths = {name: root / name for name in ("source.png", "deca.mat", "phase2.npz", "normal.png", "gaze.png")}
+        paths = {name: root / name for name in ("source.png", "deca.mat", "phase2.npz", "source_normal.png", "normal.png", "gaze.png")}
         for path in paths.values():
             path.touch()
         base = {"image_id": "sample", "image_path": str(paths["source.png"]), "deca_mat_path": str(paths["deca.mat"])}
         phase2 = {"image_id": "sample", "out_npz": str(paths["phase2.npz"])}
         cache = {
+            "source_normal": str(paths["source_normal.png"]),
             "target_normal": str(paths["normal.png"]),
             "target_gaze_heatmap": str(paths["gaze.png"]),
             "coordinate_status": "pending_manual_audit",
@@ -102,6 +103,8 @@ def test_unapproved_gaze_is_not_exposed_to_training() -> None:
             "target_gaze_head_x": "0.1", "target_gaze_head_y": "0.2", "target_gaze_head_z": "-0.97",
         }
         pending = build_row(base, phase2, cache, {}, "train", "preserve_eye_in_head")
+        assert pending["source_normal_map"] == str(paths["source_normal.png"])
+        assert pending["target_normal_map"] == str(paths["normal.png"])
         assert pending["normal_map"] == str(paths["normal.png"])
         assert pending["gaze_heatmap"] is None
         assert pending["gaze_head_x"] is None

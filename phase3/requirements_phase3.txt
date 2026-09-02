@@ -4,9 +4,11 @@
 #
 # Install command used:
 #   .venv\Scripts\python.exe -m pip install diffusers==0.40.0 safetensors==0.8.0 huggingface-hub==1.29.0 lpips==0.1.4
-#   (diffusers pulls huggingface-hub + safetensors; transformers/accelerate are NOT
-#    required for AutoencoderKL-only round-trip and are intentionally omitted)
+# Phase3.1 frozen SD1.5 preflight additionally uses transformers/accelerate.
 diffusers==0.40.0
 safetensors==0.8.0
 huggingface-hub==1.29.0
 lpips==0.1.4
+transformers==5.16.1
+accelerate==1.14.0
+tokenizers==0.23.1

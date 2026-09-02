@@ -1,12 +1,16 @@
 # Downstream Condition Dataset Schema
 
-Date: 2026-09-01
+Date: 2026-09-02
 
 ## Purpose
 
 This schema defines the manifest format for future downstream image-generation or condition-map experiments. It is an interface document only. It does not claim that Phase2.1 Gate is deployment-qualified.
 
 Each row represents one source face sample and its available conditioning artifacts.
+
+For bounded audits or overfit experiments, pass `--include-ids-file`. The
+builder preserves the ID-file order, rejects duplicates or IDs absent from the
+Phase1 manifest, and records its count and SHA256 in `dataset_summary.json`.
 
 ## JSONL Row
 
@@ -20,14 +24,26 @@ Each row represents one source face sample and its available conditioning artifa
   "deca_mat_exists": true,
   "phase2_npz": "path/to/phase2_output.npz",
   "phase2_npz_exists": true,
+  "source_depth_map": null,
+  "source_normal_map": null,
+  "source_landmark_map": null,
+  "source_face_mask": null,
+  "source_eye_mask": null,
+  "target_depth_map": null,
+  "target_normal_map": null,
+  "target_landmark_map": null,
+  "target_face_mask": null,
+  "target_eye_mask": null,
+  "target_gaze_heatmap": null,
   "depth_map": null,
   "normal_map": null,
   "landmark_map": null,
   "face_mask": null,
   "eye_mask": null,
   "gaze_heatmap": null,
-  "modalities_todo": ["depth_map", "normal_map", "landmark_map", "face_mask", "eye_mask", "gaze_heatmap"],
+  "modalities_todo": ["source_depth_map", "source_normal_map", "source_landmark_map", "source_face_mask", "source_eye_mask", "target_depth_map", "target_normal_map", "target_landmark_map", "target_face_mask", "target_eye_mask", "target_gaze_heatmap"],
   "arcface_embedding": "",
+  "arcface_embedding_exists": false,
   "gaze_pitch": null,
   "gaze_yaw": null,
   "gaze_camera_x": null,
@@ -77,14 +93,15 @@ Required fields must be present in every JSONL row. Missing paths should be repr
 | --- | --- | --- | --- |
 | `phase2_npz` | string | Phase2 inference | Standardized parameter conditioning |
 | `source_image_exists` / `deca_mat_exists` / `phase2_npz_exists` | bool | builder | Explicit path validation |
-| `depth_map` | string/null | Phase3 DECA condition cache | 16-bit target depth condition |
-| `normal_map` | string/null | Phase3 DECA condition cache | Target normal condition |
-| `landmark_map` | string/null | Phase3 DECA condition cache | Target landmark condition |
-| `face_mask` | string/null | Phase3 DECA condition cache | Loss mask or conditioning |
-| `eye_mask` | string/null | Phase3 DECA condition cache | Eye-gated conditioning and evaluation |
-| `gaze_heatmap` | string/null | approved gaze coordinate stage | Eye-anchored target gaze direction; null before approval |
+| `source_depth_map` / `target_depth_map` | string/null | Phase3 DECA condition cache | Source reconstruction / standardized target depth |
+| `source_normal_map` / `target_normal_map` | string/null | Phase3 DECA condition cache | Source reconstruction / standardized target normal |
+| `source_landmark_map` / `target_landmark_map` | string/null | Phase3 DECA condition cache | Source reconstruction / standardized target landmarks |
+| `source_face_mask` / `target_face_mask` | string/null | Phase3 DECA condition cache | Source/target face masks |
+| `source_eye_mask` / `target_eye_mask` | string/null | Phase3 DECA condition cache | Source/target eye masks |
+| `target_gaze_heatmap` | string/null | approved gaze coordinate stage | Eye-anchored target gaze direction; null before approval |
+| `depth_map` / `normal_map` / `landmark_map` / `face_mask` / `eye_mask` / `gaze_heatmap` | string/null | builder | Backward-compatible aliases of the corresponding target fields |
 | `modalities_todo` | list[string] | builder | Modalities absent from the supplied cache |
-| `arcface_embedding` | string | ArcFace extractor | Identity condition or evaluation |
+| `arcface_embedding` / `arcface_embedding_exists` | string / bool | ArcFace extractor | Validated identity condition path and existence flag |
 | `gaze_pitch` | number/null | L2CS | Gaze diagnostic |
 | `gaze_yaw` | number/null | L2CS | Gaze diagnostic |
 | `gaze_camera_x/y/z` | number/null | L2CS | Visual axis in the L2CS camera frame |

@@ -23,7 +23,13 @@ def read_jsonl(path: Path) -> list[dict]:
 
 
 def write_fixture(root: Path) -> None:
-    for name in ("source.png", "deca.mat", "phase2.npz"):
+    for name in (
+        "source.png", "deca.mat", "phase2.npz", "embedding.npy",
+        "source_depth.png", "source_normal.png", "source_landmark.png",
+        "source_face_mask.png", "source_eye_mask.png", "target_depth.png",
+        "target_normal.png", "target_landmark.png", "target_face_mask.png",
+        "target_eye_mask.png", "target_gaze.png",
+    ):
         (root / name).write_bytes(b"fixture")
 
     with (root / "phase1.csv").open("w", encoding="utf-8", newline="") as handle:
@@ -89,6 +95,34 @@ def write_fixture(root: Path) -> None:
             ]
         )
 
+    with (root / "condition.csv").open("w", encoding="utf-8", newline="") as handle:
+        fields = [
+            "image_id", "status", "coordinate_status", "source_depth", "source_normal",
+            "source_landmark", "source_face_mask", "source_eye_mask", "target_depth",
+            "target_normal", "target_landmark", "target_face_mask", "target_eye_mask",
+            "target_gaze_heatmap", "gaze_head_x", "gaze_head_y", "gaze_head_z",
+            "target_gaze_head_x", "target_gaze_head_y", "target_gaze_head_z",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerow({
+            "image_id": "complete", "status": "geometry_ready_gaze_pending",
+            "coordinate_status": "pending_manual_audit",
+            "source_depth": str(root / "source_depth.png"),
+            "source_normal": str(root / "source_normal.png"),
+            "source_landmark": str(root / "source_landmark.png"),
+            "source_face_mask": str(root / "source_face_mask.png"),
+            "source_eye_mask": str(root / "source_eye_mask.png"),
+            "target_depth": str(root / "target_depth.png"),
+            "target_normal": str(root / "target_normal.png"),
+            "target_landmark": str(root / "target_landmark.png"),
+            "target_face_mask": str(root / "target_face_mask.png"),
+            "target_eye_mask": str(root / "target_eye_mask.png"),
+            "target_gaze_heatmap": str(root / "target_gaze.png"),
+            "gaze_head_x": "0.1", "gaze_head_y": "0.2", "gaze_head_z": "-0.97",
+            "target_gaze_head_x": "0.1", "target_gaze_head_y": "0.2", "target_gaze_head_z": "-0.97",
+        })
+
     (root / "split.json").write_text(
         json.dumps({"train": ["complete"], "val": ["empty_phase2"], "test": ["no_phase2_row"]}),
         encoding="utf-8",
@@ -109,6 +143,8 @@ def test_condition_dataset_and_evaluator_skeletons() -> None:
                 str(root / "phase1.csv"),
                 "--phase2-manifest",
                 str(root / "phase2.csv"),
+                "--condition-cache-manifest",
+                str(root / "condition.csv"),
                 "--split-file",
                 str(root / "split.json"),
                 "--out-dir",
@@ -121,15 +157,24 @@ def test_condition_dataset_and_evaluator_skeletons() -> None:
         assert complete["source_image_exists"] is True
         assert complete["deca_mat_exists"] is True
         assert complete["phase2_npz_exists"] is True
+        assert complete["arcface_embedding_exists"] is True
         assert complete["alpha_expression"] == 0.5
         assert complete["gaze_camera_x"] == 0.197677
         assert complete["gaze_head_x"] is None
         assert complete["gaze_policy"] == "preserve_eye_in_head"
-        assert complete["gaze_coordinate_status"] == "pending_head_rotation"
-        assert complete["depth_map"] is None
-        assert complete["modalities_todo"] == [
-            "depth_map", "normal_map", "landmark_map", "face_mask", "eye_mask", "gaze_heatmap"
-        ]
+        assert complete["gaze_coordinate_status"] == "pending_manual_audit"
+        assert complete["condition_cache_status"] == "geometry_ready_gaze_pending"
+        assert complete["source_depth_map"] == str(root / "source_depth.png")
+        assert complete["source_normal_map"] == str(root / "source_normal.png")
+        assert complete["target_depth_map"] == str(root / "target_depth.png")
+        assert complete["target_normal_map"] == str(root / "target_normal.png")
+        assert complete["depth_map"] == complete["target_depth_map"]
+        assert complete["normal_map"] == complete["target_normal_map"]
+        assert complete["target_gaze_heatmap"] is None
+        assert complete["gaze_heatmap"] is None
+        assert complete["gaze_head_x"] is None
+        assert complete["target_gaze_head_x"] is None
+        assert complete["modalities_todo"] == ["target_gaze_heatmap"]
 
         empty_phase2 = read_jsonl(output / "val.jsonl")[0]
         assert empty_phase2["status"] == "missing_source"
@@ -146,6 +191,53 @@ def test_condition_dataset_and_evaluator_skeletons() -> None:
         assert summary["missing_field_counts"]["source_image"] == 2
         assert summary["missing_field_counts"]["phase2_npz"] == 1
         assert summary["gaze_policy"] == "preserve_eye_in_head"
+
+        include_ids = root / "include_ids.txt"
+        include_ids.write_text("complete\n", encoding="utf-8")
+        filtered_output = root / "dataset_filtered"
+        run(
+            [
+                PYTHON,
+                str(PROJECT / "scripts" / "build_condition_dataset.py"),
+                "--phase1-manifest",
+                str(root / "phase1.csv"),
+                "--phase2-manifest",
+                str(root / "phase2.csv"),
+                "--condition-cache-manifest",
+                str(root / "condition.csv"),
+                "--split-file",
+                str(root / "split.json"),
+                "--include-ids-file",
+                str(include_ids),
+                "--out-dir",
+                str(filtered_output),
+            ]
+        )
+        filtered_summary = json.loads((filtered_output / "dataset_summary.json").read_text(encoding="utf-8"))
+        assert filtered_summary["n_total"] == 1
+        assert filtered_summary["include_ids_count"] == 1
+        assert len(filtered_summary["include_ids_sha256"]) == 64
+        assert [row["image_id"] for row in read_jsonl(filtered_output / "train.jsonl")] == ["complete"]
+
+        unknown_ids = root / "unknown_ids.txt"
+        unknown_ids.write_text("absent\n", encoding="utf-8")
+        failed = subprocess.run(
+            [
+                PYTHON,
+                str(PROJECT / "scripts" / "build_condition_dataset.py"),
+                "--phase1-manifest",
+                str(root / "phase1.csv"),
+                "--include-ids-file",
+                str(unknown_ids),
+                "--out-dir",
+                str(root / "dataset_unknown"),
+            ],
+            cwd=PROJECT,
+            capture_output=True,
+            text=True,
+        )
+        assert failed.returncode != 0
+        assert "absent from Phase1 manifest" in (failed.stdout + failed.stderr)
 
         evaluators = [
             ("evaluate_identity_preservation.py", "identity_metrics.csv", "identity_summary.json", "placeholder"),

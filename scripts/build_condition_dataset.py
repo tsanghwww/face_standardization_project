@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,18 @@ def load_split_map(split_dir: Path | None, split_file: Path | None) -> dict[str,
     return out
 
 
+def load_include_ids(path: Path | None) -> tuple[list[str], str]:
+    if path is None:
+        return [], ""
+    if not path.exists():
+        raise SystemExit(f"Include IDs file not found: {path}")
+    content = path.read_bytes()
+    image_ids = [line.strip() for line in content.decode("utf-8-sig").splitlines() if line.strip()]
+    if len(image_ids) != len(set(image_ids)):
+        raise SystemExit(f"Include IDs file contains duplicates: {path}")
+    return image_ids, hashlib.sha256(content).hexdigest()
+
+
 def build_row(
     base: dict[str, str],
     phase2: dict[str, str] | None,
@@ -122,24 +135,41 @@ def build_row(
         status = "available"
 
     cache_columns = {
-        "depth_map": "target_depth",
-        "normal_map": "target_normal",
-        "landmark_map": "target_landmark",
-        "face_mask": "target_face_mask",
-        "eye_mask": "target_eye_mask",
-        "gaze_heatmap": "target_gaze_heatmap",
+        "source_depth_map": "source_depth",
+        "source_normal_map": "source_normal",
+        "source_landmark_map": "source_landmark",
+        "source_face_mask": "source_face_mask",
+        "source_eye_mask": "source_eye_mask",
+        "target_depth_map": "target_depth",
+        "target_normal_map": "target_normal",
+        "target_landmark_map": "target_landmark",
+        "target_face_mask": "target_face_mask",
+        "target_eye_mask": "target_eye_mask",
+        "target_gaze_heatmap": "target_gaze_heatmap",
     }
     coordinate_status = first_present(condition_cache, ["coordinate_status"]) or "pending_head_rotation"
     modality_fields: dict[str, str] = {}
     for name, column in cache_columns.items():
         raw = first_present(condition_cache, [column])
-        if name == "gaze_heatmap" and coordinate_status != "approved":
+        if name == "target_gaze_heatmap" and coordinate_status != "approved":
             raw = ""
         resolved, exists = resolve_path(raw)
         modality_fields[name] = resolved if exists else ""
         if raw and not exists:
             missing.append(name)
     modalities_todo = [name for name, value in modality_fields.items() if not value]
+    target_aliases = {
+        "depth_map": modality_fields["target_depth_map"],
+        "normal_map": modality_fields["target_normal_map"],
+        "landmark_map": modality_fields["target_landmark_map"],
+        "face_mask": modality_fields["target_face_mask"],
+        "eye_mask": modality_fields["target_eye_mask"],
+        "gaze_heatmap": modality_fields["target_gaze_heatmap"],
+    }
+    arcface_raw = first_present(base, ["arcface_embedding", "arcface_embedding_path", "embedding_path"])
+    arcface_path, arcface_exists = resolve_path(arcface_raw)
+    if arcface_raw and not arcface_exists:
+        missing.append("arcface_embedding")
     gaze_values = {
         name: parse_float(first_present(condition_cache, [name])) if coordinate_status == "approved" else None
         for name in (
@@ -158,8 +188,11 @@ def build_row(
         "phase2_npz": phase2_path if phase2_exists else phase2_raw,
         "phase2_npz_exists": phase2_exists,
         **{name: value or None for name, value in modality_fields.items()},
+        **{name: value or None for name, value in target_aliases.items()},
         "modalities_todo": modalities_todo,
-        "arcface_embedding": first_present(base, ["arcface_embedding", "arcface_embedding_path", "embedding_path"]),
+        "arcface_embedding": arcface_path if arcface_exists else arcface_raw,
+        "arcface_embedding_exists": arcface_exists,
+        "condition_cache_status": first_present(condition_cache, ["status"]),
         "gaze_pitch": parse_float(first_present(base, ["gaze_pitch", "pitch"])),
         "gaze_yaw": parse_float(first_present(base, ["gaze_yaw", "yaw"])),
         "gaze_camera_x": parse_float(first_present(base, ["gaze_camera_x", "gaze_x"])),
@@ -196,6 +229,7 @@ def main() -> None:
     parser.add_argument("--phase1-manifest", required=True, type=Path)
     parser.add_argument("--phase2-manifest", type=Path)
     parser.add_argument("--condition-cache-manifest", type=Path)
+    parser.add_argument("--include-ids-file", type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     split_group = parser.add_mutually_exclusive_group()
     split_group.add_argument("--split-dir", type=Path)
@@ -210,6 +244,16 @@ def main() -> None:
     args = parser.parse_args()
 
     base_rows = read_csv(args.phase1_manifest)
+    include_ids, include_ids_sha256 = load_include_ids(args.include_ids_file)
+    if include_ids:
+        base_by_id = {
+            first_present(row, ["image_id", "eval_id", "id", "file_id"]): row
+            for row in base_rows
+        }
+        missing_ids = set(include_ids) - set(base_by_id)
+        if missing_ids:
+            raise SystemExit(f"Include IDs absent from Phase1 manifest: {sorted(missing_ids)[:10]}")
+        base_rows = [base_by_id[image_id] for image_id in include_ids]
     phase2_rows = read_csv(args.phase2_manifest)
     condition_rows = read_csv(args.condition_cache_manifest)
     phase2_by_id = {first_present(row, ["image_id", "eval_id", "id"]): row for row in phase2_rows}
@@ -246,6 +290,9 @@ def main() -> None:
         "phase2_manifest_used": str(args.phase2_manifest) if args.phase2_manifest else "",
         "gaze_policy": args.gaze_policy,
         "condition_cache_manifest_used": str(args.condition_cache_manifest) if args.condition_cache_manifest else "",
+        "include_ids_file": str(args.include_ids_file) if args.include_ids_file else "",
+        "include_ids_count": len(include_ids) if args.include_ids_file else None,
+        "include_ids_sha256": include_ids_sha256,
         "scope_note": "condition maps remain null unless a generated cache is supplied",
     }
     (args.out_dir / "dataset_summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
