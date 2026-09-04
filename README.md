@@ -39,22 +39,6 @@ The repository intentionally does not include private datasets, experiment outpu
 - Local virtual environments.
 - Project planning documents and business documents.
 
-## Quick Start
-
-For DECA runtime notes, see:
-
-```text
-DECA/RUNNING_MODERN.md
-```
-
-For Phase2 standardization training and inference:
-
-```bash
-pip install -r phase2/requirements_phase2.txt
-python -m phase2.train_condition_generator --help
-python -m phase2.infer_standardize_params --help
-```
-
 ## Research Reports
 
 - [2026 Summer Work Report](docs/SUMMER_WORK_REPORT_2026.md)
