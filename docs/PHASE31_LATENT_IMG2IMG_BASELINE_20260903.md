@@ -52,3 +52,7 @@ Audit artifacts are `identity_audit/metrics.csv` and `identity_audit/summary.jso
 - Paired audit: `python -m phase3.evaluate_latent_img2img`
 - Protocol tests: `python -m tests.test_phase31_img2img`
 - Local run: `results/phase31_img2img_20260903`
+
+## Paper Visualizations
+
+Paper-ready qualitative sheets, metric figures, vector PDFs, captions, and plotting data are collected in `docs/phase31_img2img_visualizations_20260904/`. The export is reproducible with `scripts/export_phase31_paper_visuals.py`; raw samples and checkpoints remain outside Git.
