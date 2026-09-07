@@ -2,6 +2,13 @@
 
 Date: 2026-09-02
 
+> Provenance note (2026-09-07): the commands below preserve the historical
+> preflight run and use `phase2_infer_sanity_bug003_fixed_arcface_ok`. That path
+> is not the adopted target source for geometry-control claims. Phase3.1c must
+> regenerate selected-ID targets from the hashed formal Phase2 Full checkpoint
+> and pass `PHASE31C_GEOMETRY_CAUSAL_AUDIT.md` before target geometry is used as
+> evidence.
+
 ## Scope
 
 This stage prepared a bounded 32-sample validation-only interface audit. These

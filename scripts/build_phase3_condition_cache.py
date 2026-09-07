@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -50,6 +52,14 @@ def split_map(path: Path | None) -> dict[str, str]:
 def resolve(value: str, root: Path) -> Path:
     path = Path(value)
     return path if path.is_absolute() else root / path
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def load_source_params(path: Path) -> dict[str, np.ndarray]:
@@ -216,6 +226,7 @@ def main() -> None:
     if args.resume and manifest.exists():
         completed = {row["image_id"]: row for row in read_csv(manifest)}
     output = list(completed.values())
+    generated_ids: set[str] = set()
     args.out_dir.mkdir(parents=True, exist_ok=True)
     for base in rows:
         image_id = base["image_id"]
@@ -251,6 +262,7 @@ def main() -> None:
                 write_gaze_heatmap(gaze_path, target_paths["eye_mask"], source["pose"], target["pose"], gaze_camera, args.gaze_policy, image_size)
                 row["target_gaze_heatmap"] = str(gaze_path)
             row["status"] = "geometry_ready_gaze_pending" if coordinate_status != "approved" else "ready"
+            generated_ids.add(image_id)
         except Exception as exc:  # failures remain explicit
             row["failure_reason"] = f"{type(exc).__name__}:{exc}"
         output.append(row)
@@ -270,6 +282,43 @@ def main() -> None:
         "manifest": str(manifest),
     }
     (args.out_dir / "condition_cache_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    base_by_id = {row["image_id"]: row for row in rows}
+    with (args.out_dir / "condition_cache_lineage.jsonl").open("w", encoding="utf-8") as handle:
+        for row in output:
+            image_id = row["image_id"]
+            base = base_by_id.get(image_id, {})
+            phase = phase2.get(image_id, {})
+            source_mat = resolve(base["deca_mat_path"], args.project_root) if base.get("deca_mat_path") else None
+            phase_npz = resolve(phase["out_npz"], args.project_root) if phase.get("out_npz") else None
+            target_hashes = {
+                field: sha256(Path(row[field]))
+                for field in ("target_normal", "target_depth", "target_landmark", "target_face_mask")
+                if row.get(field) and Path(row[field]).is_file()
+            }
+            lineage = {
+                "image_id": image_id,
+                "status": row["status"],
+                "binding_mode": "generation_time" if image_id in generated_ids else "retrospective_existing_files",
+                "source_mat": str(source_mat) if source_mat else "",
+                "source_mat_sha256": sha256(source_mat) if source_mat and source_mat.is_file() else None,
+                "phase2_npz": str(phase_npz) if phase_npz else "",
+                "phase2_npz_sha256": sha256(phase_npz) if phase_npz and phase_npz.is_file() else None,
+                "target_map_sha256": target_hashes,
+            }
+            handle.write(json.dumps(lineage, allow_nan=False) + "\n")
+    provenance = {
+        "phase1_manifest": str(args.phase1_manifest), "phase1_manifest_sha256": sha256(args.phase1_manifest),
+        "phase2_manifest": str(args.phase2_manifest), "phase2_manifest_sha256": sha256(args.phase2_manifest),
+        "ids_file": str(args.ids_file) if args.ids_file else None,
+        "ids_file_sha256": sha256(args.ids_file) if args.ids_file else None,
+        "condition_manifest_sha256": sha256(manifest),
+        "lineage_sha256": sha256(args.out_dir / "condition_cache_lineage.jsonl"),
+        "freshly_generated": len(generated_ids), "retrospectively_bound": len(output) - len(generated_ids),
+        "code_sha256": sha256(Path(__file__)),
+        "binding_note": "generation_time proves the current invocation wrote the maps; retrospective_existing_files only binds files present at resume time",
+    }
+    (args.out_dir / "condition_cache_provenance.json").write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+    (args.out_dir / "condition_cache_exact_command.txt").write_text(subprocess.list2cmdline([sys.executable, *sys.argv]), encoding="utf-8")
     print(json.dumps(summary, indent=2))
 
 
