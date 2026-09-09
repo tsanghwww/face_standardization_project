@@ -22,9 +22,11 @@ Warm-start the 64-step checkpoint. Keep the VAE, SD1.5 UNet, identity estimator,
 Run two bounded variants with identical data, seeds, and step budgets:
 
 1. `geometry_loss_only`: train Face Adapter with explicit geometry outcome supervision.
-2. `geometry_loss_plus_ranking`: add a paired target-versus-shuffled geometry ranking loss.
+2. `geometry_loss_plus_ranking`: add a paired target-versus-source geometry ranking loss.
 
 Do not add more architecture branches until these variants show whether the present injection points can transmit a usable signal.
+
+Do not use another sample's Phase2 target as the primary negative. Phase2 targets are deliberately near-canonical: in the 32-sample train selection, pairwise target-target pose distance has mean 0.87 degrees and pairwise expression RMSE has mean 0.0153. A shuffled target is therefore often semantically equivalent for the standardization objective.
 
 ## Training Paths
 
@@ -73,14 +75,16 @@ $$
 
 Failed or nonfinite DECA estimates must remain explicit; no FAN rescue is allowed.
 
-For the ranking variant, pair the same source latent/noise/identity with target and shuffled geometry:
+For the ranking variant, pair the same source latent/noise/identity with target and source geometry:
 
 $$
 \mathcal{L}_{\mathrm{rank}}=
-\max\left(0,m+D(\hat x_{\mathrm{target}},y^*)-D(\hat x_{\mathrm{shuffle}},y^*)\right),
+\max\left(0,m+D(\hat x_{\mathrm{target}},y^*)-D(\hat x_{\mathrm{source}},y^*)\right),
 $$
 
-where $D$ is the normalized sum of pose, expression, and landmark target errors. The margin and normalization constants must be selected on train-only diagnostics and frozen before validation.
+where $D$ is the unit-consistent normalized sum of pose, expression, and landmark target errors. Pose error is measured in degrees and normalized by a degree-valued constant. The margin and normalization constants must be selected on train-only diagnostics and frozen before validation.
+
+An optional control-sensitivity audit may render synthetic counterfactual conditions with at least 10 degrees of target-pose separation. These counterfactuals are diagnostics only and must preserve source identity and use valid DECA parameter ranges. They are preferable to shuffled near-canonical targets when testing continuous geometric control.
 
 Total loss:
 
@@ -95,7 +99,7 @@ $$
 - Report zero-input residuals throughout training. If they remain comparable to target-input residuals, run a separate no-bias Face Adapter diagnostic; do not silently change the main architecture.
 - Log residual-to-UNet-activation RMS ratios at all four injection scales.
 - Use identity-condition dropout only as a train-only diagnostic; never change identity in the target-geometry causal arm.
-- Include source, target, zero, and shuffled geometry in fixed-noise diagnostics every 16 optimizer steps.
+- Include source, target, zero, and shuffled geometry in fixed-noise diagnostics every 16 optimizer steps, but treat shuffled as descriptive rather than a required negative unless its target parameters are demonstrably separated.
 - Preserve exact checkpoint, split, code, estimator, and input hashes.
 
 ## Budget
@@ -111,9 +115,10 @@ No 8,160-sample training is authorized by this plan.
 
 At strength 0.25 on the frozen Phase3.1c validation set:
 
-- Target geometry must beat source, zero, and shuffled geometry for pose and at least one of expression/landmark.
+- Target geometry must beat source and zero geometry for pose and at least one of expression/landmark.
 - Pose improvement must be at least 1 degree or 10% relative to the source-geometry error, not merely have a bootstrap interval excluding zero.
 - The paired bootstrap interval for the primary pose contrast must remain below zero.
+- If a counterfactual control audit is run, output pose must change in the requested direction and preserve the ordering of targets separated by at least 10 degrees.
 - Single-face ArcFace cosine must not fall by more than 0.03 relative to source geometry.
 - Single-face-valid coverage must not fall by more than 5 percentage points.
 - Generation and DECA failures remain in the 32-sample denominator.

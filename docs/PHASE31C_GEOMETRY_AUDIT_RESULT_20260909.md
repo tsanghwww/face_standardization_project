@@ -91,10 +91,10 @@ The result does not support 3D standardization, geometry controllability, or gaz
 
 - The 32 samples deliberately over-sample large geometry changes and are not population representative.
 - DECA is used both to construct target conditions and to evaluate generated geometry, so these are model-domain diagnostics rather than independent human measurements.
+- Shuffled Phase2 targets are a weak negative control for standardization because the targets are intentionally near-canonical. In the Phase3.1d train selection, pairwise target-target pose distance averaged 0.87 degrees and expression RMSE averaged 0.0153. Failure to distinguish shuffled targets is therefore not sufficient by itself to reject standardization; the stronger failure is that target geometry did not meaningfully beat source or zero geometry.
 - ArcFace primary identity statistics require exactly one detected face in both source and output; coverage was 23/32 at strength 0.25 and 22/32 at 0.50.
 - No calibrated identity threshold or fixed-test evaluation was performed.
 
 ## Next Stage
 
 Proceed to Phase3.1d only as a bounded train-only geometry-supervision experiment. Do not scale the current loss to all 8,160 samples and do not enable gaze training yet. The next experiment must make target geometry part of the optimization objective and demonstrate held-out causal response before formal training.
-
