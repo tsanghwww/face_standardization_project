@@ -86,13 +86,22 @@ where $D$ is the unit-consistent normalized sum of pose, expression, and landmar
 
 An optional control-sensitivity audit may render synthetic counterfactual conditions with at least 10 degrees of target-pose separation. These counterfactuals are diagnostics only and must preserve source identity and use valid DECA parameter ranges. They are preferable to shuffled near-canonical targets when testing continuous geometric control.
 
-Total loss:
+Total loss with an absolute source-condition guard:
 
 $$
 \mathcal{L}=\mathcal{L}_{\mathrm{src}}+
-\lambda_g\mathcal{L}_{\mathrm{geom}}+
+\lambda_g\left[
+\mathcal{L}_{\mathrm{geom}}(\hat x_{\mathrm{target}},y^*)+
+\rho_s\mathcal{L}_{\mathrm{geom}}(\hat x_{\mathrm{source}},y_{\mathrm{source}})
+\right]+
 \lambda_r\mathcal{L}_{\mathrm{rank}}.
 $$
+
+The source and target arms share source latent, noise, timestep, and identity.
+The source absolute term prevents the ranking margin from being satisfied only
+by degrading the negative arm. The bounded Phase3.1f candidate is
+`lambda_g=0.003`, `rho_s=0.3`, and `lambda_r=1.0`, selected by a train-only
+first-order audit; it remains unverified until the bounded update is run.
 
 ## Anti-Collapse Controls
 

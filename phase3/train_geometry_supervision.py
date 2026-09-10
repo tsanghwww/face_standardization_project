@@ -32,11 +32,12 @@ from safetensors.torch import load_file
 
 from phase3.reconstruction_adapter import ReconstructionAdapter
 from phase3.reconstruction_data import file_hash
-from phase3.geometry_audit_data import GeometryAuditDataset, intervention
+from phase3.geometry_audit_data import GeometryAuditDataset, intervention, load_condition
 from phase3.sample_latent_img2img import load_adapter_exact
 from phase3.differentiable_geometry import (
     estimate_geometry, geodesic_angle_deg, expression_rmse, geometry_loss,
-    landmark_nme, load_deca_frozen, load_target_geometry, margin_ranking_loss,
+    geometry_supervision_objective, landmark_nme, load_deca_frozen,
+    load_source_geometry, load_target_geometry, margin_ranking_loss,
     normalized_geometry_distance, one_step_x0,
 )
 
@@ -140,11 +141,14 @@ def residual_activation_rms(residuals: list[torch.Tensor], activations: list[tor
 
 
 def run_preflight(model, vae, deca, empty, scheduler, device, dtype, amp, items, targets,
+                  source_targets, geometry_weights, geometry_weight,
+                  source_geometry_ratio, ranking_weight, ranking_margin,
                   timestep: int = 300) -> dict:
-    """Gradient preflight through the full differentiable geometry path."""
+    """Gradient preflight through the complete paired supervision objective."""
     torch.cuda.reset_peak_memory_stats()
     item = items[0]
     target = targets[0]
+    source_target = source_targets[0]
     with torch.no_grad():
         latent = vae.encode(item["image"][None].to(device)).latent_dist.mode() * float(vae.config.scaling_factor)
     generator = torch.Generator().manual_seed(20260909 + 1)
@@ -153,14 +157,44 @@ def run_preflight(model, vae, deca, empty, scheduler, device, dtype, amp, items,
     noisy = scheduler.add_noise(latent.to(device, dtype=dtype), noise, t)
     hooks = ResidualHooks(model)
     try:
+        identity = item["identity"][None].to(device)
         with amp():
-            eps = model(noisy, t, item["source_condition"][None].to(device), item["identity"][None].to(device), empty)
-        x0 = one_step_x0(scheduler, noisy, t, eps)
-        rgb_tensor = vae.decode(x0.float() / float(vae.config.scaling_factor)).sample
-        pose, exp, lm = estimate_geometry(deca, rgb_tensor)
-        loss = geometry_loss(pose, exp, lm, target["pose"][None], target["expression"][None], target["landmarks"][None])["total"]
+            eps_target = model(noisy, t, item["target_condition"][None].to(device), identity, empty)
+        target_rgb = vae.decode(
+            one_step_x0(scheduler, noisy, t, eps_target).float() / float(vae.config.scaling_factor)
+        ).sample
+        pose_t, exp_t, lm_t = estimate_geometry(deca, target_rgb)
+        target_geometry = geometry_loss(
+            pose_t, exp_t, lm_t, target["pose"][None], target["expression"][None], target["landmarks"][None],
+            geometry_weights,
+        )
+
+        with amp():
+            eps_source = model(noisy, t, item["source_condition"][None].to(device), identity, empty)
+        source_rgb = vae.decode(
+            one_step_x0(scheduler, noisy, t, eps_source).float() / float(vae.config.scaling_factor)
+        ).sample
+        pose_s, exp_s, lm_s = estimate_geometry(deca, source_rgb)
+        source_geometry = geometry_loss(
+            pose_s, exp_s, lm_s,
+            source_target["pose"][None], source_target["expression"][None], source_target["landmarks"][None],
+            geometry_weights,
+        )
+        d_target = normalized_geometry_distance(*target_geometry["terms"].values())
+        d_source_vs_target = normalized_geometry_distance(
+            geodesic_angle_deg(pose_s[:, :3], target["pose"][None][:, :3]).mean(),
+            expression_rmse(exp_s, target["expression"][None]).mean(),
+            landmark_nme(lm_s, target["landmarks"][None]).mean(),
+        )
+        ranking = margin_ranking_loss(d_target, d_source_vs_target, ranking_margin)
+        geometry_objective = geometry_supervision_objective(
+            target_geometry["total"], source_geometry["total"], ranking,
+            geometry_weight, source_geometry_ratio, ranking_weight,
+        )
+        source_epsilon = F.mse_loss(eps_source.float(), noise.float())
+        loss = source_epsilon + geometry_objective
         if not torch.isfinite(loss):
-            raise RuntimeError("Nonfinite preflight geometry loss")
+            raise RuntimeError("Nonfinite complete preflight objective")
         loss.backward()
     finally:
         hooks.remove()
@@ -178,6 +212,10 @@ def run_preflight(model, vae, deca, empty, scheduler, device, dtype, amp, items,
     report = {
         "status": "passed",
         "loss": float(loss.detach().cpu()),
+        "source_epsilon_mse": float(source_epsilon.detach().cpu()),
+        "target_geometry": float(target_geometry["total"].detach().cpu()),
+        "source_self_geometry": float(source_geometry["total"].detach().cpu()),
+        "ranking": float(ranking.detach().cpu()),
         "gradient_per_scale": per_scale,
         "gpu_peak_allocated_gib": peak_gib,
         "gpu_peak_allocated_mib": torch.cuda.max_memory_allocated() / 1024**2,
@@ -254,8 +292,10 @@ def main() -> None:
     parser.add_argument("--geometry-timestep-low", type=int, default=100)
     parser.add_argument("--geometry-timestep-high", type=int, default=400)
     parser.add_argument("--geometry-weights", nargs="+", type=float, default=(1.0, 1.0, 1.0))
-    parser.add_argument("--geometry-loss-weight", type=float, default=1.0)
-    parser.add_argument("--ranking-loss-weight", type=float, default=0.1)
+    parser.add_argument("--geometry-loss-weight", type=float, default=0.003)
+    parser.add_argument("--source-geometry-ratio", type=float, default=0.3)
+    parser.add_argument("--counterfactual-manifest", type=Path)
+    parser.add_argument("--ranking-loss-weight", type=float, default=1.0)
     parser.add_argument("--ranking-margin", type=float, default=0.05)
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--diagnose-interval", action="store_true")
@@ -269,8 +309,10 @@ def main() -> None:
         raise ValueError("Output directory must be empty")
     if len(args.geometry_weights) != 3 or any(not math.isfinite(w) or w <= 0 for w in args.geometry_weights):
         raise ValueError("geometry-weights must be three positive finite values")
-    if not (0 < args.geometry_timestep_low <= args.geometry_timestep_high < 1000):
-        raise ValueError("Invalid geometry timestep interval")
+    if not (0 < args.geometry_timestep_low <= args.geometry_timestep_high <= 400):
+        raise ValueError("Geometry timestep interval must stay within [1, 400]")
+    if not math.isfinite(args.source_geometry_ratio) or args.source_geometry_ratio < 0:
+        raise ValueError("source-geometry-ratio must be finite and nonnegative")
     args.out_dir.mkdir(parents=True)
     started = time.perf_counter()
 
@@ -288,6 +330,18 @@ def main() -> None:
     items = [dataset[i] for i in range(len(dataset))]
     if len(items) < 2:
         raise ValueError("At least two train samples are required")
+    counterfactual_rows = {}
+    if args.counterfactual_manifest:
+        rows = [json.loads(line) for line in args.counterfactual_manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
+        counterfactual_rows = {str(row["image_id"]): row for row in rows}
+        expected_ids = {item["image_id"] for item in items}
+        if len(counterfactual_rows) != len(rows) or set(counterfactual_rows) != expected_ids:
+            raise ValueError("Counterfactual manifest must contain each selected train ID exactly once")
+        for image_id, row in counterfactual_rows.items():
+            if row.get("identity_source_image_id") != image_id:
+                raise ValueError(f"Counterfactual identity mismatch: {image_id}")
+            if float(row.get("pair_pose_separation_deg", 0.0)) < 10.0:
+                raise ValueError(f"Counterfactual pose separation is below 10 degrees: {image_id}")
 
     config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
     ranking_negative = "source_geometry" if args.variant == "geometry_loss_plus_ranking" else "not_applicable"
@@ -301,6 +355,8 @@ def main() -> None:
         "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "torch": torch.__version__, "cuda": torch.version.cuda,
         "supervision": "source epsilon MSE + target geometry (pose SO3 / expression RMSE / landmark NME); no FAN/rescue/gaze",
+        "ranking_absolute_guards": ["target_geometry", "source_self_geometry", "source_epsilon_mse"],
+        "counterfactual_manifest_sha256": file_hash(args.counterfactual_manifest) if args.counterfactual_manifest else None,
     })
     save_json(args.out_dir / "config.json", config)
     (args.out_dir / "exact_command.txt").write_text(subprocess.list2cmdline([sys.executable, *sys.argv]), encoding="utf-8")
@@ -326,6 +382,15 @@ def main() -> None:
         "split_hashes": {n: file_hash(args.split_dir / n) for n in ("train_ids.txt", "validation_ids.txt", "fixed_test_ids.txt")},
         "model_files": hashes,
         "lr": args.lr, "accumulation": args.accumulation, "seed": args.seed,
+        "geometry_timestep_low": args.geometry_timestep_low,
+        "geometry_timestep_high": args.geometry_timestep_high,
+        "geometry_weights": list(args.geometry_weights),
+        "geometry_loss_weight": args.geometry_loss_weight,
+        "source_geometry_ratio": args.source_geometry_ratio,
+        "ranking_loss_weight": args.ranking_loss_weight,
+        "ranking_margin": args.ranking_margin,
+        "ranking_negative": ranking_negative,
+        "counterfactual_manifest": file_hash(args.counterfactual_manifest) if args.counterfactual_manifest else None,
         "mode": f"geometry_supervision_{args.variant}", "gaze_loss": False, "size": 256,
         "code_hashes": {p.name: file_hash(p) for p in (Path(__file__), Path(__file__).with_name("reconstruction_adapter.py"), Path(__file__).with_name("reconstruction_data.py"))},
     }
@@ -351,8 +416,39 @@ def main() -> None:
 
     deca = load_deca_frozen(args.deca_root, device)
     targets = [load_target_geometry(deca, Path(item["deca_mat"]), Path(item["phase2_npz"]), device) for item in items]
+    source_targets = [load_source_geometry(deca, Path(item["deca_mat"]), device) for item in items]
+    target_variants = []
+    for item, canonical_target in zip(items, targets):
+        variants = [{
+            "name": "canonical",
+            "condition": item["target_condition"],
+            "target": canonical_target,
+        }]
+        if counterfactual_rows:
+            row = counterfactual_rows[item["image_id"]]
+            for name in ("negative_yaw", "positive_yaw"):
+                variant = row["variants"][name]
+                condition_row = {
+                    "image_id": item["image_id"],
+                    "target_normal_map": variant["target_normal_map"],
+                    "target_depth_map": variant["target_depth_map"],
+                    "target_landmark_map": variant["target_landmark_map"],
+                    "target_face_mask": variant["target_face_mask_map"],
+                }
+                variants.append({
+                    "name": name,
+                    "condition": load_condition(condition_row, "target", dataset.size),
+                    "target": load_target_geometry(
+                        deca, Path(item["deca_mat"]), Path(variant["phase2_npz"]), device
+                    ),
+                })
+        target_variants.append(variants)
 
-    preflight = run_preflight(model, vae, deca, empty, scheduler, device, dtype, amp, items, targets)
+    preflight = run_preflight(
+        model, vae, deca, empty, scheduler, device, dtype, amp, items, targets,
+        source_targets, tuple(args.geometry_weights), args.geometry_loss_weight,
+        args.source_geometry_ratio, args.ranking_loss_weight, args.ranking_margin,
+    )
     save_json(args.out_dir / "preflight.json", preflight)
     print(json.dumps({"preflight": preflight}, indent=2))
     if args.preflight_only:
@@ -388,6 +484,7 @@ def main() -> None:
     diagnostics_dir = args.out_dir / "diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     loss_weight_geom = args.geometry_loss_weight
+    source_geometry_ratio = args.source_geometry_ratio
     loss_weight_rank = args.ranking_loss_weight
     margin = args.ranking_margin
 
@@ -402,9 +499,11 @@ def main() -> None:
                 item = items[index]
                 latent = latents[index].to(device, dtype=dtype)
                 condition = item["source_condition"][None].to(device)
-                target_condition = item["target_condition"][None].to(device)
+                epoch = serial // len(items)
+                variant = target_variants[index][epoch % len(target_variants[index])]
+                target_condition = variant["condition"][None].to(device)
                 identity = item["identity"][None].to(device)
-                target = targets[index]
+                target = variant["target"]
 
                 # Source reconstruction path (full timestep range, epsilon MSE).
                 gen = torch.Generator().manual_seed(args.seed + serial + 1)
@@ -426,11 +525,14 @@ def main() -> None:
                 geom = geometry_loss(pose_p, exp_p, lm_p, target["pose"][None], target["expression"][None], target["landmarks"][None], geometry_weights)
                 if not (torch.isfinite(loss_src) and torch.isfinite(geom["total"])):
                     raise RuntimeError(f"Nonfinite training loss at step {step}")
-                terms = {"src_epsilon_mse": float(loss_src.detach().cpu()), "geometry_total": float(geom["total"].detach().cpu()),
+                terms = {"target_variant": variant["name"], "src_epsilon_mse": float(loss_src.detach().cpu()), "geometry_total": float(geom["total"].detach().cpu()),
                          **{f"geometry_{k}": float(v.detach().cpu()) for k, v in geom["terms"].items()}}
                 scaler.scale(loss_src / args.accumulation).backward()
 
-                if args.variant == "geometry_loss_plus_ranking":
+                need_source_geometry = source_geometry_ratio > 0 or args.variant == "geometry_loss_plus_ranking"
+                source_geom = None
+                d_source = None
+                if need_source_geometry:
                     # The negative arm is the SAME sample's source condition, sharing the
                     # identical source latent / noise / timestep / source identity as the
                     # target arm. Shuffled near-canonical targets are descriptive only and
@@ -438,6 +540,17 @@ def main() -> None:
                     with amp():
                         eps_source = model(noisy_geom, t_geom, condition, identity, empty)
                     (pose_s, exp_s, lm_s), _ = geometry_from_eps(noisy_geom, t_geom, eps_source)
+                    source_target = source_targets[index]
+                    source_geom = geometry_loss(
+                        pose_s, exp_s, lm_s,
+                        source_target["pose"][None], source_target["expression"][None], source_target["landmarks"][None],
+                        geometry_weights,
+                    )
+                    terms["source_geometry_total"] = float(source_geom["total"].detach().cpu())
+                    terms.update({f"source_geometry_{k}": float(v.detach().cpu()) for k, v in source_geom["terms"].items()})
+
+                loss_rank = torch.zeros((), device=device)
+                if args.variant == "geometry_loss_plus_ranking":
                     d_target = normalized_geometry_distance(geom["terms"]["pose_so3_deg"], geom["terms"]["expression_rmse"], geom["terms"]["landmark_nme"])
                     d_source = normalized_geometry_distance(
                         geodesic_angle_deg(pose_s[:, :3], target["pose"][None][:, :3]).mean(),
@@ -447,27 +560,34 @@ def main() -> None:
                     if not torch.isfinite(loss_rank):
                         raise RuntimeError(f"Nonfinite ranking loss at step {step}")
                     terms["ranking"] = float(loss_rank.detach().cpu())
-                    combined = loss_weight_geom * geom["total"] + loss_weight_rank * loss_rank
-                    scaler.scale(combined / args.accumulation).backward()
-                else:
-                    scaler.scale(loss_weight_geom * geom["total"] / args.accumulation).backward()
+
+                source_total = source_geom["total"] if source_geom is not None else torch.zeros_like(geom["total"])
+                combined = geometry_supervision_objective(
+                    geom["total"], source_total, loss_rank,
+                    loss_weight_geom, source_geometry_ratio, loss_weight_rank,
+                )
+                scaler.scale(combined / args.accumulation).backward()
 
                 for key, value in terms.items():
-                    total_terms[key] = total_terms.get(key, 0.0) + value
+                    if key == "target_variant":
+                        total_terms[key] = value
+                    else:
+                        total_terms[key] = total_terms.get(key, 0.0) + value
             scaler.unscale_(optimizer)
             grad_norms = {n: float(p.grad.detach().float().norm()) for n, p in model.named_parameters()
                           if p.requires_grad and p.grad is not None}
             total_norm = torch.nn.utils.clip_grad_norm_(trainable, 1.0, error_if_nonfinite=True)
             scaler.step(optimizer)
             scaler.update()
-            row = {"step": step + 1, "loss": {k: v / args.accumulation for k, v in total_terms.items()},
+            averaged_terms = {k: (v if k == "target_variant" else v / args.accumulation) for k, v in total_terms.items()}
+            row = {"step": step + 1, "loss": averaged_terms,
                    "gradient_norm_max": float(max(grad_norms.values())) if grad_norms else 0.0,
                    "total_gradient_norm": float(total_norm), "amp_scale": scaler.get_scale(),
                    "elapsed_seconds": time.perf_counter() - started}
             log.write(json.dumps(row, allow_nan=False) + "\n")
             print(json.dumps(row), flush=True)
             if (step + 1) % 16 == 0 or step + 1 == args.steps:
-                diagnostic = run_diagnostic(model, vae, deca, empty, scheduler, device, dtype, amp, items, targets,
+                diagnostic = run_diagnostic(model, vae, deca, empty, scheduler, device, dtype, amp, items, targets, source_targets,
                                             latents, sf, args.diagnostic_timestep, args.seed, frozen_unet_hash)
                 save_json(diagnostics_dir / f"step_{(step + 1):04d}.json", diagnostic)
                 with torch.no_grad():
@@ -492,6 +612,7 @@ def main() -> None:
         "frozen_unet_hash_before": frozen_before, "frozen_unet_hash_after": model.frozen_hash(),
         "geometry_timestep_low": args.geometry_timestep_low, "geometry_timestep_high": args.geometry_timestep_high,
         "geometry_weights": list(geometry_weights), "geometry_loss_weight": loss_weight_geom,
+        "source_geometry_ratio": source_geometry_ratio,
         "ranking_loss_weight": loss_weight_rank, "ranking_margin": margin, "ranking_negative": ranking_negative,
         "gpu_peak_allocated_mib": torch.cuda.max_memory_allocated() / 1024**2 if use_cuda else None,
         "wall_seconds": time.perf_counter() - started, "scope": config["supervision"],
@@ -500,7 +621,7 @@ def main() -> None:
     print(json.dumps(summary, indent=2))
 
 
-def run_diagnostic(model, vae, deca, empty, scheduler, device, dtype, amp, items, targets, latents, sf, timestep, seed, frozen_hash):
+def run_diagnostic(model, vae, deca, empty, scheduler, device, dtype, amp, items, targets, source_targets, latents, sf, timestep, seed, frozen_hash):
     rows = []
     hooks = ResidualHooks(model)
     with torch.no_grad():
@@ -523,7 +644,16 @@ def run_diagnostic(model, vae, deca, empty, scheduler, device, dtype, amp, items
                     "expression_rmse": float(expression_rmse(exp, target["expression"][None]).item()),
                     "landmark_nme": float(landmark_nme(lm, target["landmarks"][None]).item()),
                 }
+                source_self = {}
+                if arm == "source_geometry":
+                    source_target = source_targets[index]
+                    source_self = {
+                        "source_self_pose_deg": float(geodesic_angle_deg(pose[:, :3], source_target["pose"][None][:, :3]).item()),
+                        "source_self_expression_rmse": float(expression_rmse(exp, source_target["expression"][None]).item()),
+                        "source_self_landmark_nme": float(landmark_nme(lm, source_target["landmarks"][None]).item()),
+                    }
                 rows.append({"image_id": item["image_id"], "arm": arm, **errors,
+                             **source_self,
                              "residual_scales": residual_scales(hooks.residuals),
                              "residual_activation_rms": residual_activation_rms(hooks.residuals, hooks.activations)})
         zero_condition = torch.zeros_like(items[0]["source_condition"][None]).to(device)
@@ -539,6 +669,12 @@ def run_diagnostic(model, vae, deca, empty, scheduler, device, dtype, amp, items
             "expression_rmse_mean": float(np.mean([r["expression_rmse"] for r in arm_rows])),
             "landmark_nme_mean": float(np.mean([r["landmark_nme"] for r in arm_rows])),
         }
+        if arm == "source_geometry":
+            aggregates[arm].update({
+                "source_self_pose_deg_mean": float(np.mean([r["source_self_pose_deg"] for r in arm_rows])),
+                "source_self_expression_rmse_mean": float(np.mean([r["source_self_expression_rmse"] for r in arm_rows])),
+                "source_self_landmark_nme_mean": float(np.mean([r["source_self_landmark_nme"] for r in arm_rows])),
+            })
     return {"timestep": timestep, "n_samples": len(items), "arms": aggregates,
             "per_sample": rows, "zero_input_residuals": zero_rows,
             "frozen_unet_hash": frozen_hash}

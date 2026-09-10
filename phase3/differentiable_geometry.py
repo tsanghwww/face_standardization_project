@@ -147,6 +147,23 @@ def load_target_geometry(deca, deca_mat: Path, phase2_npz: Path, device: str) ->
     return {"pose": pose, "expression": expression, "landmarks": landmarks}
 
 
+def load_source_geometry(deca, deca_mat: Path, device: str) -> dict:
+    """DECA source geometry corresponding to the rendered source condition."""
+    from scripts.build_phase3_condition_cache import codedict, load_source_params
+
+    source = load_source_params(deca_mat)
+    with torch.no_grad():
+        op = deca.decode(codedict(source, device, int(deca.image_size)), rendering=False, return_vis=False)
+    result = {
+        "pose": torch.from_numpy(np.asarray(source["pose"], dtype=np.float32)).to(device),
+        "expression": torch.from_numpy(np.asarray(source["expression"], dtype=np.float32)).to(device),
+        "landmarks": op["landmarks2d"][0, :, :2].clone(),
+    }
+    if not all(torch.isfinite(value).all() for value in result.values()):
+        raise ValueError("Nonfinite source geometry")
+    return result
+
+
 def geometry_loss(
     pose_pred: torch.Tensor,
     exp_pred: torch.Tensor,
@@ -196,3 +213,23 @@ def margin_ranking_loss(
     if not (torch.isfinite(target_distance).all() and torch.isfinite(negative_distance).all()):
         raise ValueError("Nonfinite geometry distance passed to ranking loss")
     return torch.clamp(margin + target_distance - negative_distance, min=0.0)
+
+
+def geometry_supervision_objective(
+    target_geometry: torch.Tensor,
+    source_geometry: torch.Tensor,
+    ranking: torch.Tensor,
+    geometry_weight: float,
+    source_geometry_ratio: float,
+    ranking_weight: float,
+) -> torch.Tensor:
+    """Combine absolute target/source geometry and paired ranking losses."""
+    scalars = (geometry_weight, source_geometry_ratio, ranking_weight)
+    if any(not math.isfinite(value) or value < 0 for value in scalars):
+        raise ValueError("Geometry objective weights must be finite and nonnegative")
+    losses = (target_geometry, source_geometry, ranking)
+    if any(not torch.isfinite(value).all() for value in losses):
+        raise ValueError("Nonfinite term passed to geometry supervision objective")
+    return geometry_weight * (
+        target_geometry + source_geometry_ratio * source_geometry
+    ) + ranking_weight * ranking

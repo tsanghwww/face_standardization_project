@@ -18,7 +18,8 @@ import torch
 
 from phase3.differentiable_geometry import (
     axis_angle_to_matrix, expression_rmse, geodesic_angle_deg, landmark_nme,
-    margin_ranking_loss, normalized_geometry_distance, whole_image_warp,
+    geometry_supervision_objective, margin_ranking_loss,
+    normalized_geometry_distance, whole_image_warp,
 )
 from phase3.reconstruction_data import file_hash, read_ids
 from scripts.select_phase31d_geometry_supervision_ids import pose_delta_deg, quartile, rank01
@@ -123,6 +124,8 @@ def test_ranking_uses_source_negative():
     assert "eps_source = model(noisy_geom, t_geom, condition, identity, empty)" in text
     assert "(index + 1) % len(items)" not in text  # no shuffled target in the training path
     assert "ranking_negative" in text and "source_geometry" in text
+    assert "complete paired supervision objective" in text
+    assert "source_epsilon + geometry_objective" in text
 
     margin = 0.05
     # target error smaller than source error by more than margin -> loss == 0.
@@ -131,6 +134,15 @@ def test_ranking_uses_source_negative():
     # target error larger than source error -> loss > 0.
     positive = margin_ranking_loss(torch.tensor(2.0), torch.tensor(1.0), margin)
     assert positive.item() > 0.0
+    target = torch.tensor(10.0, requires_grad=True)
+    source = torch.tensor(20.0, requires_grad=True)
+    rank = torch.tensor(0.05, requires_grad=True)
+    objective = geometry_supervision_objective(target, source, rank, 0.003, 0.3, 1.0)
+    assert abs(objective.item() - (0.003 * (10.0 + 0.3 * 20.0) + 0.05)) < 1e-6
+    objective.backward()
+    assert abs(target.grad.item() - 0.003) < 1e-7
+    assert abs(source.grad.item() - 0.0009) < 1e-7
+    assert abs(rank.grad.item() - 1.0) < 1e-7
     print("[6] ranking uses same-sample source negative; target-vs-source margin loss OK")
 
 
