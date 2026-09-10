@@ -17,7 +17,7 @@ The existing 32 validation samples remain frozen as the only model-selection aud
 
 ## Model Strategy
 
-Warm-start the 64-step checkpoint. Keep the VAE, SD1.5 UNet, identity estimator, and geometry estimator frozen. Train the Face Adapter first; retain the learned identity branch but freeze it during the first geometry-isolation run.
+Warm-start the source-reconstruction checkpoint, not the failed geometry-supervision checkpoint. Keep the VAE, SD1.5 UNet, identity estimator, and geometry estimator frozen. Train the Face Adapter first; retain the learned identity branch but freeze it during the first geometry-isolation run.
 
 Run two bounded variants with identical data, seeds, and step budgets:
 
@@ -113,10 +113,11 @@ first-order audit; it remains unverified until the bounded update is run.
 
 ## Budget
 
-1. Gradient-chain and two-optimizer-step smoke test with backward/finite/VRAM checks.
-2. 64-step run for each variant.
-3. If target-versus-control separation is still absent, stop.
-4. Only one variant may continue to 256 steps, selected using the frozen 32-sample validation audit.
+1. Full paired-objective preflight and two-optimizer-step smoke test with backward/finite/VRAM checks.
+2. One 96-step train-only run: each of 32 identities receives canonical, negative-yaw, and positive-yaw supervision exactly once.
+3. Re-run the frozen-noise counterfactual direction/order audit and the canonical source/target diagnostics.
+4. If target-versus-control separation, source preservation, or counterfactual tracking is absent, stop before validation.
+5. Only the passing checkpoint may enter the already frozen 32-sample validation audit. No 256-step extension is authorized by this revision.
 
 No 8,160-sample training is authorized by this plan.
 
