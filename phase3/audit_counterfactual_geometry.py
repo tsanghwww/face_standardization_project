@@ -26,6 +26,7 @@ from safetensors.torch import load_file
 from phase3.differentiable_geometry import estimate_geometry, load_deca_frozen, one_step_x0
 from phase3.counterfactual_geometry import counterfactual_tracking_metrics, summarize_counterfactual_rows
 from phase3.geometry_audit_data import GeometryAuditDataset, load_condition
+from phase3.geometry_residual_adapter import GeometryResidualControl
 from phase3.reconstruction_adapter import ReconstructionAdapter
 from phase3.reconstruction_data import file_hash, read_ids
 from phase3.sample_latent_img2img import load_adapter_exact
@@ -66,9 +67,10 @@ def main() -> None:
 
     raw = [json.loads(line) for line in args.counterfactual_manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
     counterfactuals = {str(row["image_id"]): row for row in raw}
-    if len(counterfactuals) != len(raw) or set(counterfactuals) != set(ids):
+    if len(counterfactuals) != len(raw) or set(ids) - set(counterfactuals):
         raise ValueError("Counterfactual manifest must contain every selected ID exactly once")
-    for image_id, row in counterfactuals.items():
+    for image_id in ids:
+        row = counterfactuals[image_id]
         if row.get("identity_source_image_id") != image_id or float(row.get("pair_pose_separation_deg", 0)) < 10:
             raise ValueError(f"Invalid same-identity counterfactual pair: {image_id}")
 
@@ -88,11 +90,20 @@ def main() -> None:
     unet = UNet2DConditionModel.from_pretrained(
         args.backbone_path / "unet", variant="fp16", local_files_only=True, torch_dtype=dtype
     ).to(device).eval().requires_grad_(False)
-    model = ReconstructionAdapter(unet).to(device).eval()
-    load_adapter_exact(model, saved["adapter"])
-    freeze_identity_branch(model)
+    base = ReconstructionAdapter(unet).to(device).eval()
+    architecture = saved.get("architecture", "face_control_adapter_v1")
+    if architecture == GeometryResidualControl.architecture:
+        load_adapter_exact(base, saved["base_adapter"])
+        model = GeometryResidualControl(base).to(device).eval()
+        model.edit.load_state_dict(saved["edit_adapter"], strict=True)
+    elif architecture == "face_control_adapter_v1":
+        load_adapter_exact(base, saved["adapter"])
+        model = base
+    else:
+        raise ValueError(f"Unsupported checkpoint architecture: {architecture}")
+    freeze_identity_branch(base)
     model.requires_grad_(False)
-    if model.frozen_hash() != saved["frozen_hash"]:
+    if base.frozen_hash() != saved["frozen_hash"]:
         raise ValueError("Frozen UNet hash mismatch")
     unet.enable_gradient_checkpointing(gradient_checkpointing_func=partial(checkpoint, use_reentrant=False))
     scheduler = DDPMScheduler.from_pretrained(args.backbone_path / "scheduler", local_files_only=True)
@@ -108,6 +119,7 @@ def main() -> None:
         "image_ids": ids,
         "pairing": "same source latent, CPU noise, timestep, and identity; geometry condition only",
         "checkpoint_sha256": file_hash(args.checkpoint),
+        "architecture": architecture,
         "counterfactual_manifest_sha256": file_hash(args.counterfactual_manifest),
         "split_hashes": {name: file_hash(args.split_dir / name) for name in ("train_ids.txt", "validation_ids.txt", "fixed_test_ids.txt")},
         "model_files": hashes,
@@ -125,6 +137,7 @@ def main() -> None:
         with torch.no_grad():
             latent = (vae.encode(item["image"][None].to(device)).latent_dist.mode() * sf).to(dtype)
         identity = item["identity"][None].to(device)
+        source_condition = item["source_condition"][None].to(device)
         variants = {}
         for name in ("negative_yaw", "positive_yaw"):
             row = pair["variants"][name]
@@ -148,7 +161,12 @@ def main() -> None:
                 outputs = {}
                 for name in ("negative_yaw", "positive_yaw"):
                     with torch.no_grad(), amp():
-                        eps = model(noisy, t, variants[name]["condition"], identity, empty)
+                        if architecture == GeometryResidualControl.architecture:
+                            eps = model(
+                                noisy, t, source_condition, variants[name]["condition"], identity, empty
+                            )
+                        else:
+                            eps = model(noisy, t, variants[name]["condition"], identity, empty)
                     with torch.no_grad():
                         decoded = vae.decode(one_step_x0(scheduler, noisy, t, eps).float() / sf).sample
                         pose, _, _ = estimate_geometry(deca, decoded)
