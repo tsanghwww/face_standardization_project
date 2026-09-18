@@ -89,6 +89,7 @@ def main() -> None:
         renderer_module = importlib.import_module("decalib.utils.renderer")
         deca_module = importlib.import_module("decalib.deca")
         renderer_module.standard_rasterize = extension.standard_rasterize
+        renderer_module.load_obj = renderer_module.util.load_obj
         deca_module.set_rasterizer = lambda name: None
         DECA = deca_module.DECA
         rasterizer_hash = file_hash(binary)

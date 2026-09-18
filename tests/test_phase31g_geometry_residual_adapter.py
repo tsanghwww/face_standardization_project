@@ -76,6 +76,7 @@ def main() -> None:
     assert 'set(ids) & fixed' in builder_source
     assert '"--prebuilt-rasterizer"' in builder_source
     assert 'rasterizer_hash = file_hash(binary)' in builder_source
+    assert 'renderer_module.load_obj = renderer_module.util.load_obj' in builder_source
     print("Phase3.1g high-resolution delta adapter protocol passed")
 
 
