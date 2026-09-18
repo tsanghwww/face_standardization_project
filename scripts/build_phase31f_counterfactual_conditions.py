@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
 from pathlib import Path
@@ -45,6 +46,11 @@ def main() -> None:
     parser.add_argument("--deca-root", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--split", choices=("train", "validation"), default="train")
+    parser.add_argument(
+        "--prebuilt-rasterizer",
+        type=Path,
+        help="Directory containing a compatible standard_rasterize_cuda binary",
+    )
     parser.add_argument("--yaw-offset-deg", type=float, default=10.0)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -71,8 +77,23 @@ def main() -> None:
         raise ValueError("Manifest contains duplicate IDs or misses selected IDs")
 
     sys.path.insert(0, str(args.deca_root))
-    from decalib.deca import DECA
     from decalib.utils.config import cfg as deca_cfg
+
+    rasterizer_hash = None
+    if args.prebuilt_rasterizer:
+        binary = args.prebuilt_rasterizer / "standard_rasterize_cuda.pyd"
+        if not binary.is_file():
+            raise ValueError(f"Prebuilt rasterizer binary is missing: {binary}")
+        sys.path.insert(0, str(args.prebuilt_rasterizer))
+        extension = importlib.import_module("standard_rasterize_cuda")
+        renderer_module = importlib.import_module("decalib.utils.renderer")
+        deca_module = importlib.import_module("decalib.deca")
+        renderer_module.standard_rasterize = extension.standard_rasterize
+        deca_module.set_rasterizer = lambda name: None
+        DECA = deca_module.DECA
+        rasterizer_hash = file_hash(binary)
+    else:
+        from decalib.deca import DECA
 
     deca_cfg.rasterizer_type = "standard"
     deca_cfg.model.use_tex = False
@@ -138,6 +159,7 @@ def main() -> None:
         "manifest_sha256": file_hash(manifest),
         "ids_sha256": file_hash(args.ids_file),
         "source_manifest_sha256": file_hash(args.manifest),
+        "prebuilt_rasterizer_sha256": rasterizer_hash,
         "split_hashes": {
             name: file_hash(args.split_dir / name)
             for name in ("train_ids.txt", "validation_ids.txt", "fixed_test_ids.txt")

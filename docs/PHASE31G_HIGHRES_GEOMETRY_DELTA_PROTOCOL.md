@@ -66,6 +66,11 @@ recorded training inputs do not overlap the validation IDs, and keeps the fixed
 test registry sealed. It applies the already-declared gate without changing its
 thresholds.
 
+On a host with an already compiled DECA standard rasterizer but no active MSVC
+toolchain, the condition builder may use `--prebuilt-rasterizer`. The binary
+must exist as `standard_rasterize_cuda.pyd`; its SHA256 is recorded in the
+summary. This bypasses JIT build discovery without changing DECA rendering.
+
 Passing this gate only demonstrates that the new branch can learn geometry
 control on optimization identities. It does not establish generalization,
 identity preservation, standardization quality, or gaze disentanglement.

@@ -74,6 +74,8 @@ def main() -> None:
     builder_source = (root / "scripts" / "build_phase31f_counterfactual_conditions.py").read_text(encoding="utf-8")
     assert 'choices=("train", "validation")' in builder_source
     assert 'set(ids) & fixed' in builder_source
+    assert '"--prebuilt-rasterizer"' in builder_source
+    assert 'rasterizer_hash = file_hash(binary)' in builder_source
     print("Phase3.1g high-resolution delta adapter protocol passed")
 
 
