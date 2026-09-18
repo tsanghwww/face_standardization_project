@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build same-identity Phase3 counterfactual pose conditions for train-only use."""
+"""Build split-isolated same-identity Phase3 counterfactual pose conditions."""
 
 from __future__ import annotations
 
@@ -44,6 +44,7 @@ def main() -> None:
     parser.add_argument("--split-dir", required=True, type=Path)
     parser.add_argument("--deca-root", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
+    parser.add_argument("--split", choices=("train", "validation"), default="train")
     parser.add_argument("--yaw-offset-deg", type=float, default=10.0)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -59,8 +60,10 @@ def main() -> None:
     train = read_ids(args.split_dir / "train_ids.txt")
     validation = read_ids(args.split_dir / "validation_ids.txt")
     fixed = read_ids(args.split_dir / "fixed_test_ids.txt")
-    if set(ids) - train or set(ids) & validation or set(ids) & fixed:
-        raise ValueError("Counterfactual conditions are restricted to train IDs")
+    expected = train if args.split == "train" else validation
+    other = validation if args.split == "train" else train
+    if set(ids) - expected or set(ids) & other or set(ids) & fixed:
+        raise ValueError(f"Counterfactual conditions are not isolated to {args.split}")
 
     rows = [json.loads(line) for line in args.manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
     by_id = {str(row["image_id"]): row for row in rows}
@@ -129,7 +132,8 @@ def main() -> None:
         "n_conditions": 2 * len(output),
         "yaw_offset_degrees": args.yaw_offset_deg,
         "minimum_pair_pose_separation_degrees": min(row["pair_pose_separation_deg"] for row in output),
-        "train_only": True,
+        "split": args.split,
+        "train_only": args.split == "train",
         "gaze_enabled": False,
         "manifest_sha256": file_hash(manifest),
         "ids_sha256": file_hash(args.ids_file),
@@ -138,7 +142,10 @@ def main() -> None:
             name: file_hash(args.split_dir / name)
             for name in ("train_ids.txt", "validation_ids.txt", "fixed_test_ids.txt")
         },
-        "scope": "same-identity synthetic pose controls; diagnostic/training conditions, not real multiview ground truth",
+        "scope": (
+            f"{args.split}-only same-identity synthetic pose controls; diagnostic conditions, "
+            "not real multiview ground truth"
+        ),
     }
     (args.out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     (args.out_dir / "exact_command.txt").write_text(

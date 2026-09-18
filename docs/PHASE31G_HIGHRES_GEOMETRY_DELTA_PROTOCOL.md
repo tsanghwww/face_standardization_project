@@ -61,6 +61,11 @@ not a final production loss or a claim of gaze disentanglement.
    with correct direction and own-target ordering, and median projected pose
    change of at least 0.5 degrees.
 
+The validation audit uses `--split validation`, verifies that the checkpoint's
+recorded training inputs do not overlap the validation IDs, and keeps the fixed
+test registry sealed. It applies the already-declared gate without changing its
+thresholds.
+
 Passing this gate only demonstrates that the new branch can learn geometry
 control on optimization identities. It does not establish generalization,
 identity preservation, standardization quality, or gaze disentanglement.

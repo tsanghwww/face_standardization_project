@@ -25,7 +25,7 @@ from safetensors.torch import load_file
 
 from phase3.differentiable_geometry import estimate_geometry, load_deca_frozen, one_step_x0
 from phase3.counterfactual_geometry import counterfactual_tracking_metrics, summarize_counterfactual_rows
-from phase3.geometry_audit_data import GeometryAuditDataset, load_condition
+from phase3.geometry_audit_data import GeometryAuditDataset, load_condition, verify_training_isolation
 from phase3.geometry_residual_adapter import GeometryResidualControl
 from phase3.reconstruction_adapter import ReconstructionAdapter
 from phase3.reconstruction_data import file_hash, read_ids
@@ -45,6 +45,7 @@ def main() -> None:
     ):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--timesteps", nargs="+", type=int, default=(100, 250, 400))
+    parser.add_argument("--split", choices=("train", "validation"), default="train")
     parser.add_argument("--seed", type=int, default=20260910)
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -56,14 +57,16 @@ def main() -> None:
     if any(timestep < 100 or timestep > 400 for timestep in args.timesteps):
         raise ValueError("Counterfactual audit is restricted to timesteps 100-400")
 
-    dataset = GeometryAuditDataset(args.manifest, args.split_dir, args.ids_file, "train")
+    dataset = GeometryAuditDataset(args.manifest, args.split_dir, args.ids_file, args.split)
     items = [dataset[index] for index in range(len(dataset))]
     ids = [item["image_id"] for item in items]
     train = read_ids(args.split_dir / "train_ids.txt")
     validation = read_ids(args.split_dir / "validation_ids.txt")
     fixed = read_ids(args.split_dir / "fixed_test_ids.txt")
-    if set(ids) - train or set(ids) & validation or set(ids) & fixed:
-        raise ValueError("Counterfactual audit is restricted to train IDs")
+    expected = train if args.split == "train" else validation
+    other = validation if args.split == "train" else train
+    if set(ids) - expected or set(ids) & other or set(ids) & fixed:
+        raise ValueError(f"Counterfactual audit is not isolated to {args.split}")
 
     raw = [json.loads(line) for line in args.counterfactual_manifest.read_text(encoding="utf-8").splitlines() if line.strip()]
     counterfactuals = {str(row["image_id"]): row for row in raw}
@@ -85,6 +88,11 @@ def main() -> None:
     hashes = model_hashes(args.backbone_path, args.vae_path, args.empty_prompt)
     saved = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     verify_warm_start(saved, hashes, Path(__file__).parent)
+    training_ids = None
+    if args.split == "validation":
+        fingerprint = dict(saved.get("fingerprint") or {})
+        fingerprint["inputs"] = fingerprint.get("inputs", fingerprint.get("input_hashes", ()))
+        training_ids = sorted(verify_training_isolation(fingerprint, set(ids), args.split_dir))
     vae = AutoencoderKL.from_pretrained(args.vae_path, local_files_only=True, torch_dtype=torch.float32).to(device).eval().requires_grad_(False)
     sf = float(vae.config.scaling_factor)
     unet = UNet2DConditionModel.from_pretrained(
@@ -115,7 +123,8 @@ def main() -> None:
     args.out_dir.mkdir(parents=True)
     config = {
         **{key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
-        "split": "train",
+        "split": args.split,
+        "checkpoint_training_ids": training_ids,
         "image_ids": ids,
         "pairing": "same source latent, CPU noise, timestep, and identity; geometry condition only",
         "checkpoint_sha256": file_hash(args.checkpoint),
@@ -125,7 +134,10 @@ def main() -> None:
         "model_files": hashes,
         "code_sha256": file_hash(Path(__file__)),
         "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-        "scope": "train-only one-step counterfactual geometry tracking; no optimizer, validation, fixed test, or gaze claim",
+        "scope": (
+            f"{args.split}-only one-step counterfactual geometry tracking; no optimizer, "
+            "fixed test, threshold search, or gaze claim"
+        ),
     }
     save_json(args.out_dir / "config.json", config)
     (args.out_dir / "exact_command.txt").write_text(subprocess.list2cmdline([sys.executable, *sys.argv]), encoding="utf-8")

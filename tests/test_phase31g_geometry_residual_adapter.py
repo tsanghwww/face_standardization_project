@@ -69,6 +69,11 @@ def main() -> None:
     assert "expected - set(by_id)" in training_source
     assert 'saved.get("architecture", "face_control_adapter_v1")' in audit_source
     assert "set(ids) - set(counterfactuals)" in audit_source
+    assert 'choices=("train", "validation")' in audit_source
+    assert "verify_training_isolation" in audit_source
+    builder_source = (root / "scripts" / "build_phase31f_counterfactual_conditions.py").read_text(encoding="utf-8")
+    assert 'choices=("train", "validation")' in builder_source
+    assert 'set(ids) & fixed' in builder_source
     print("Phase3.1g high-resolution delta adapter protocol passed")
 
 
