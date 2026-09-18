@@ -98,6 +98,32 @@ def geodesic_angle_deg(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     return torch.rad2deg(angle)
 
 
+def relative_rotation_vector_deg(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Signed SO(3) rotation vector taking ``a`` to ``b``, in degrees.
+
+    The small-angle branch uses the skew vector directly, which keeps a finite
+    gradient at identity. This signed representation is required for checking
+    whether a generated counterfactual moves along, rather than against, the
+    target rotation axis.
+    """
+    relative = axis_angle_to_matrix(b) @ axis_angle_to_matrix(a).transpose(-1, -2)
+    skew_vector = 0.5 * torch.stack(
+        (
+            relative[..., 2, 1] - relative[..., 1, 2],
+            relative[..., 0, 2] - relative[..., 2, 0],
+            relative[..., 1, 0] - relative[..., 0, 1],
+        ),
+        dim=-1,
+    )
+    sin_angle = torch.norm(skew_vector, dim=-1, keepdim=True)
+    trace = torch.diagonal(relative, dim1=-2, dim2=-1).sum(-1, keepdim=True)
+    cos_angle = torch.clamp((trace - 1.0) * 0.5, -1.0, 1.0)
+    angle = torch.atan2(sin_angle, cos_angle)
+    regular_scale = angle / sin_angle.clamp_min(1e-6)
+    scale = torch.where(sin_angle > 1e-6, regular_scale, torch.ones_like(regular_scale))
+    return torch.rad2deg(skew_vector * scale)
+
+
 def expression_rmse(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """RMSE over the last dimension (50D expression)."""
     if a.shape[-1] != 50 or b.shape[-1] != 50:

@@ -21,7 +21,7 @@ from safetensors.torch import load_file
 from phase3.differentiable_geometry import (
     estimate_geometry, expression_rmse, geodesic_angle_deg, geometry_loss,
     landmark_nme, load_deca_frozen, load_target_geometry, margin_ranking_loss,
-    normalized_geometry_distance, one_step_x0,
+    normalized_geometry_distance, one_step_x0, relative_rotation_vector_deg,
 )
 from phase3.geometry_audit_data import GeometryAuditDataset, load_condition
 from phase3.geometry_residual_adapter import GeometryResidualControl, minimum_pair_separation_loss
@@ -240,12 +240,18 @@ def main() -> None:
         output_separation = geodesic_angle_deg(
             predictions["negative_yaw"][0][:, :3], predictions["positive_yaw"][0][:, :3]
         ).mean()
-        target_separation = geodesic_angle_deg(
+        output_delta = relative_rotation_vector_deg(
+            predictions["negative_yaw"][0][:, :3], predictions["positive_yaw"][0][:, :3]
+        )
+        target_delta = relative_rotation_vector_deg(
             pair["variants"]["negative_yaw"]["target"]["pose"][None][:, :3],
             pair["variants"]["positive_yaw"]["target"]["pose"][None][:, :3],
-        ).mean()
+        )
+        target_separation = torch.norm(target_delta, dim=-1).mean()
+        target_axis = target_delta.detach() / torch.norm(target_delta.detach(), dim=-1, keepdim=True).clamp_min(1e-6)
+        projected_output_change = torch.sum(output_delta * target_axis, dim=-1).mean()
         separation_loss, required_separation = minimum_pair_separation_loss(
-            output_separation, target_separation, args.minimum_transfer_ratio
+            projected_output_change, target_separation, args.minimum_transfer_ratio
         )
         absolute_mean = torch.stack(absolute_losses).mean()
         ranking_mean = torch.stack(rankings).mean()
@@ -259,6 +265,7 @@ def main() -> None:
             "total": float(total.detach()), "absolute_geometry": float(absolute_mean.detach()),
             "ranking": float(ranking_mean.detach()), "pair_separation": float(separation_loss.detach()),
             "output_separation_deg": float(output_separation.detach()),
+            "projected_output_change_deg": float(projected_output_change.detach()),
             "required_separation_deg": float(required_separation.detach()),
             "target_separation_deg": float(target_separation.detach()),
             "negative_distance": float(distances[0].detach()), "positive_distance": float(distances[1].detach()),

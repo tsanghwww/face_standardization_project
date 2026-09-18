@@ -20,8 +20,9 @@ it is not a longer continuation of the Phase3.1f run.
    training.
 4. Negative-yaw and positive-yaw arms share identity, source latent, noise,
    and timestep. In addition to target error and target-vs-source ranking, a
-   minimum pair-separation loss requires output separation to reach 10% of the
-   target pair separation.
+   minimum signed pair-separation loss requires the output change projected on
+   the target rotation axis to reach 10% of the target pair separation. An
+   opposite-direction change increases this loss instead of satisfying it.
 5. Timesteps remain restricted to 100-400. Validation and fixed test remain
    sealed until the train-only mechanism gate passes.
 
@@ -33,7 +34,7 @@ For counterfactual arms `a in {negative_yaw, positive_yaw}`:
 L = 0.003 * mean_a L_geometry(a)
   + 1.0   * mean_a max(0, margin + D(output_a, target_a)
                                  - D(source_output, target_a))
-  + 1.0   * max(0, r * Delta_target - Delta_output)
+  + 1.0   * max(0, r * Delta_target - project(Delta_output, axis_target))
             / max(r * Delta_target, epsilon)
 ```
 

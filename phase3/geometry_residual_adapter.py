@@ -125,19 +125,20 @@ class GeometryResidualControl(nn.Module):
 
 
 def minimum_pair_separation_loss(
-    output_separation: torch.Tensor,
+    projected_output_change: torch.Tensor,
     target_separation: torch.Tensor,
     minimum_transfer_ratio: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Penalize a counterfactual pair that moves less than a target fraction.
+    """Require signed output motion along the target axis.
 
     This prevents a ranking hinge from succeeding on an arbitrarily small
-    directionally correct change. The target separation is supervision only.
+    change and prevents an unsigned separation objective from accepting a
+    motion in the opposite direction. The target separation is supervision only.
     """
     if not 0 < minimum_transfer_ratio <= 1:
         raise ValueError("minimum_transfer_ratio must be in (0, 1]")
-    if not (torch.isfinite(output_separation).all() and torch.isfinite(target_separation).all()):
+    if not (torch.isfinite(projected_output_change).all() and torch.isfinite(target_separation).all()):
         raise ValueError("Pair separations must be finite")
     required = target_separation.detach() * minimum_transfer_ratio
-    loss = torch.relu(required - output_separation) / required.clamp_min(1e-6)
+    loss = torch.relu(required - projected_output_change) / required.clamp_min(1e-6)
     return loss, required

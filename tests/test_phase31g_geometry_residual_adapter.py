@@ -8,6 +8,7 @@ from phase3.geometry_residual_adapter import (
     HighResolutionGeometryEditAdapter,
     minimum_pair_separation_loss,
 )
+from phase3.differentiable_geometry import relative_rotation_vector_deg
 
 
 def main() -> None:
@@ -44,6 +45,20 @@ def main() -> None:
     assert torch.allclose(output_separation.grad, torch.tensor(-0.5))
     satisfied, _ = minimum_pair_separation_loss(torch.tensor(2.5), torch.tensor(20.0), 0.1)
     assert satisfied.item() == 0.0
+    reversed_loss, _ = minimum_pair_separation_loss(torch.tensor(-1.0), torch.tensor(20.0), 0.1)
+    assert torch.allclose(reversed_loss, torch.tensor(1.5))
+
+    negative = torch.tensor([[0.0, -torch.pi / 18, 0.0]], requires_grad=True)
+    positive = torch.tensor([[0.0, torch.pi / 18, 0.0]], requires_grad=True)
+    signed_delta = relative_rotation_vector_deg(negative, positive)
+    assert torch.allclose(signed_delta, torch.tensor([[0.0, 20.0, 0.0]]), atol=1e-4)
+    signed_delta.sum().backward()
+    assert torch.isfinite(negative.grad).all() and torch.isfinite(positive.grad).all()
+    zero = torch.zeros(1, 3, requires_grad=True)
+    identical = relative_rotation_vector_deg(zero, zero)
+    assert torch.allclose(identical, torch.zeros_like(identical), atol=1e-7)
+    identical.sum().backward()
+    assert torch.isfinite(zero.grad).all()
 
     root = Path(__file__).parents[1]
     training_source = (root / "phase3" / "train_geometry_residual_control.py").read_text(encoding="utf-8")
