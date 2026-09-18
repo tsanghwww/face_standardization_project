@@ -88,11 +88,15 @@ def main() -> None:
     hashes = model_hashes(args.backbone_path, args.vae_path, args.empty_prompt)
     saved = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
     verify_warm_start(saved, hashes, Path(__file__).parent)
-    training_ids = None
+    optimization_ids = None
+    registered_input_ids = None
     if args.split == "validation":
         fingerprint = dict(saved.get("fingerprint") or {})
         fingerprint["inputs"] = fingerprint.get("inputs", fingerprint.get("input_hashes", ()))
-        training_ids = sorted(verify_training_isolation(fingerprint, set(ids), args.split_dir))
+        registered_input_ids = sorted(verify_training_isolation(fingerprint, set(ids), args.split_dir))
+        optimization_ids = sorted({str(value) for value in fingerprint.get("image_ids", ())})
+        if not optimization_ids or set(optimization_ids) - set(registered_input_ids):
+            raise ValueError("Checkpoint optimization IDs are absent from registered train inputs")
     vae = AutoencoderKL.from_pretrained(args.vae_path, local_files_only=True, torch_dtype=torch.float32).to(device).eval().requires_grad_(False)
     sf = float(vae.config.scaling_factor)
     unet = UNet2DConditionModel.from_pretrained(
@@ -124,7 +128,8 @@ def main() -> None:
     config = {
         **{key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
         "split": args.split,
-        "checkpoint_training_ids": training_ids,
+        "checkpoint_optimization_ids": optimization_ids,
+        "checkpoint_registered_input_ids": registered_input_ids,
         "image_ids": ids,
         "pairing": "same source latent, CPU noise, timestep, and identity; geometry condition only",
         "checkpoint_sha256": file_hash(args.checkpoint),
@@ -206,7 +211,7 @@ def main() -> None:
         "metrics_sha256": file_hash(args.out_dir / "metrics.jsonl"),
         "wall_seconds": time.perf_counter() - started,
         "gpu_peak_allocated_mib": torch.cuda.max_memory_allocated() / 1024**2 if use_cuda else None,
-        "denominator_policy": "all selected train IDs at every timestep; failures retained",
+        "denominator_policy": f"all selected {args.split} IDs at every timestep; failures retained",
         "gaze_evaluated": False,
     })
     save_json(args.out_dir / "summary.json", report)

@@ -165,6 +165,11 @@ def main() -> None:
                 raise ValueError(f"Nonfinite source latent: {item['image_id']}")
             latents.append(latent.cpu())
 
+    selected_ids = {item["image_id"] for item in items}
+    selected_input_hashes = [
+        row for row in dataset.input_hashes if str(row["image_id"]) in selected_ids
+    ]
+
     fingerprint = {
         "architecture": model.architecture,
         "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
@@ -174,8 +179,8 @@ def main() -> None:
         "counterfactual_manifest": file_hash(args.counterfactual_manifest),
         "split_hashes": {name: file_hash(args.split_dir / name) for name in ("train_ids.txt", "validation_ids.txt", "fixed_test_ids.txt")},
         "model_files": hashes,
-        "inputs": dataset.input_hashes,
-        "input_hashes": dataset.input_hashes,
+        "inputs": selected_input_hashes,
+        "input_hashes": selected_input_hashes,
         "image_ids": [item["image_id"] for item in items],
         "code_hashes": {path.name: file_hash(path) for path in (
             Path(__file__), Path(__file__).with_name("geometry_residual_adapter.py"),

@@ -71,6 +71,8 @@ def main() -> None:
     assert "set(ids) - set(counterfactuals)" in audit_source
     assert 'choices=("train", "validation")' in audit_source
     assert "verify_training_isolation" in audit_source
+    assert '"checkpoint_optimization_ids"' in audit_source
+    assert 'f"all selected {args.split} IDs' in audit_source
     builder_source = (root / "scripts" / "build_phase31f_counterfactual_conditions.py").read_text(encoding="utf-8")
     assert 'choices=("train", "validation")' in builder_source
     assert 'set(ids) & fixed' in builder_source
