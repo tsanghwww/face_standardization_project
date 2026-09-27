@@ -29,7 +29,7 @@ from phase3.geometry_audit_data import GeometryAuditDataset, load_condition, ver
 from phase3.geometry_residual_adapter import GeometryResidualControl
 from phase3.reconstruction_adapter import ReconstructionAdapter
 from phase3.reconstruction_data import file_hash, read_ids
-from phase3.sample_latent_img2img import load_adapter_exact
+from phase3.sample_latent_img2img import load_adapter_exact, rgb
 from phase3.train_geometry_supervision import freeze_identity_branch, model_hashes, verify_warm_start
 
 
@@ -48,6 +48,7 @@ def main() -> None:
     parser.add_argument("--split", choices=("train", "validation"), default="train")
     parser.add_argument("--seed", type=int, default=20260910)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument("--save-images", action="store_true")
     args = parser.parse_args()
 
     if args.out_dir.exists():
@@ -125,6 +126,11 @@ def main() -> None:
     deca = load_deca_frozen(args.deca_root, str(device))
 
     args.out_dir.mkdir(parents=True)
+    if args.save_images:
+        (args.out_dir / "references").mkdir()
+        for name in ("negative_yaw", "positive_yaw"):
+            for timestep in args.timesteps:
+                (args.out_dir / "images" / name / f"t{timestep:03d}").mkdir(parents=True)
     config = {
         **{key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
         "split": args.split,
@@ -151,6 +157,9 @@ def main() -> None:
     started = time.perf_counter()
     for index, item in enumerate(items):
         pair = counterfactuals[item["image_id"]]
+        if args.save_images:
+            source_path = args.out_dir / "references" / f"{item['image_id']}_source.png"
+            rgb(item["image"]).save(source_path)
         with torch.no_grad():
             latent = (vae.encode(item["image"][None].to(device)).latent_dist.mode() * sf).to(dtype)
         identity = item["identity"][None].to(device)
@@ -188,6 +197,12 @@ def main() -> None:
                         decoded = vae.decode(one_step_x0(scheduler, noisy, t, eps).float() / sf).sample
                         pose, _, _ = estimate_geometry(deca, decoded)
                     outputs[name] = pose[0].detach().float().cpu().numpy()
+                    if args.save_images:
+                        relative = Path("images") / name / f"t{timestep:03d}" / f"{item['image_id']}.png"
+                        output_path = args.out_dir / relative
+                        rgb(decoded[0]).save(output_path)
+                        result[f"{name}_output"] = relative.as_posix()
+                        result[f"{name}_sha256"] = file_hash(output_path)
                 result.update(
                     status="success",
                     output_negative_pose=outputs["negative_yaw"].tolist(),
@@ -208,6 +223,7 @@ def main() -> None:
     report = summarize_counterfactual_rows(rows, ids, list(args.timesteps))
     report.update({
         "status": "completed",
+        "config_sha256": file_hash(args.out_dir / "config.json"),
         "metrics_sha256": file_hash(args.out_dir / "metrics.jsonl"),
         "wall_seconds": time.perf_counter() - started,
         "gpu_peak_allocated_mib": torch.cuda.max_memory_allocated() / 1024**2 if use_cuda else None,
